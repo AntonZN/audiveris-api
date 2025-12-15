@@ -58,14 +58,6 @@
   <launchable type="desktop-id">org.audiveris.audiveris.desktop</launchable>
   <developer id="org.audiveris"><name>Hervé Bitteur et al.</name></developer>
   <releases>
-    <release version="5.8.1" date="2025-11-22" urgency="low" type="stable">
-      <description>
-		<p>Bug fixes</p>
-		<ul>
-		  <li>Fix issues with the key signature change feature in 5.8.0. </li>
-		</ul>
-      </description>
-    </release>
     <release version="5.9" date="2025-12-10" urgency="low" type="stable">
       <description>
 	      <p>User Interface</p>
@@ -85,6 +77,14 @@
          <li>Publication of Audiveris on the Windows Community repository via WinGet command</li>
        </ul>
     </description>
+    </release>
+    <release version="5.8.1" date="2025-11-22" urgency="low" type="stable">
+      <description>
+		<p>Bug fixes</p>
+		<ul>
+		  <li>Fix issues with the key signature change feature in 5.8.0. </li>
+		</ul>
+      </description>
     </release>
     <release version="5.8" date="2025-11-17" urgency="low" type="stable">
       <description>
