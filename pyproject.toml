@@ -1,0 +1,22 @@
+[project]
+name = "audiveris"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "anton",email = "a.zinoviev@sb117.ru"}
+]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi (>=0.128.0,<0.129.0)",
+    "uvicorn (>=0.40.0,<0.41.0)",
+    "python-multipart (>=0.0.21,<0.0.22)",
+    "watchfiles (>=1.1.1,<2.0.0)",
+    "redis (>=7.1.0,<8.0.0)",
+    "pydantic-settings (>=2.12.0,<3.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

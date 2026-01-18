@@ -1,0 +1,64 @@
+services:
+  audiveris-api:
+    build:
+      context: .
+    depends_on:
+      redis:
+        condition: service_started
+    ports:
+      - "8000"
+    volumes:
+      - ./api:/srv/api
+      - storage:/storage
+    environment:
+      INPUT_DIR: ${INPUT_DIR}
+      OUTPUT_DIR: ${OUTPUT_DIR}
+      KEEP_ARTIFACTS: ${KEEP_ARTIFACTS}
+      MIN_INTERLINE: ${MIN_INTERLINE}
+      TESSDATA_PREFIX: ${TESSDATA_PREFIX}
+      JAVA_OPTS: ${JAVA_OPTS}
+      TASK_WORKERS: ${TASK_WORKERS}
+      REDIS_URL: ${REDIS_URL}
+      MEDIA_ROOT: ${MEDIA_ROOT}
+      MEDIA_BASE_URL: ${MEDIA_BASE_URL}
+      MEDIA_PATH_PREFIX: ${MEDIA_PATH_PREFIX}
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+    networks:
+      - audiveris
+
+  redis:
+    image: redis:7.4
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - audiveris
+
+  caddy:
+    image: caddy:2.8-alpine
+    depends_on:
+      audiveris-api:
+        condition: service_started
+    ports:
+      - "80:80"
+#      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - storage:/storage:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    networks:
+      - audiveris
+
+volumes:
+  storage:
+  caddy_data:
+  caddy_config:
+
+networks:
+  audiveris:

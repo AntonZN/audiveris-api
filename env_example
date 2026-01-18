@@ -1,0 +1,11 @@
+INPUT_DIR=/storage/in
+OUTPUT_DIR=/storage/out
+KEEP_ARTIFACTS=1
+MIN_INTERLINE=11
+TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata
+JAVA_OPTS=-Xms512m -Xmx4g
+TASK_WORKERS=1
+REDIS_URL=redis://redis:6379/0
+MEDIA_ROOT=/storage/out
+MEDIA_BASE_URL=http://localhost
+MEDIA_PATH_PREFIX=media

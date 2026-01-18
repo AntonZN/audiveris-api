@@ -1,0 +1,8 @@
+:80 {
+    handle_path /media/* {
+        root * /storage/out
+        file_server
+    }
+
+    reverse_proxy audiveris-api:8000
+}

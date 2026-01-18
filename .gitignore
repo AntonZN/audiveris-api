@@ -104,3 +104,8 @@ docs/pdf/build
 # flatpak
 dev/flatpak/.flatpak-builder/
 dev/flatpak/gradle/
+
+data/in
+data/out
+data/tasks
+.env

@@ -1,0 +1,7 @@
+.idea
+.gradle
+data
+api/__pycache__
+api/.pytest_cache
+api/.venv
+.env
