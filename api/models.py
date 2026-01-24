@@ -47,22 +47,6 @@ class TaskCreateResponse(ApiModel):
     status: TaskStatus = Field(description="Начальный статус (всегда 'queued')")
 
 
-class Task(ApiModel):
-    """Полная модель задачи (внутреннее использование)."""
-
-    id: str
-    status: TaskStatus
-    created_at: datetime
-    updated_at: datetime
-    playlist: bool = False
-    input_files: list[str] = []
-    input_dir: str | None = None
-    output_dir: str | None = None
-    progress: TaskProgress | None = None
-    results: list[FileResult] = []
-    errors: list[str] = []
-
-
 class TaskResponse(ApiModel):
     """Ответ со статусом задачи."""
 
@@ -71,8 +55,8 @@ class TaskResponse(ApiModel):
     created_at: str | None = Field(default=None, description="Время создания (ISO 8601)")
     updated_at: str | None = Field(default=None, description="Время обновления (ISO 8601)")
     progress: TaskProgress | None = Field(default=None, description="Прогресс обработки")
-    results: FileResult | None = Field(default=None, description="Результаты по каждому файлу")
-    errors: str | None = Field(default=None, description="Список ошибок")
+    results: FileResult | None = Field(default=None, description="Результат обработки")
+    errors: str | None = Field(default=None, description="Ошибка обработки")
 
 
 class TaskResultResponse(ApiModel):

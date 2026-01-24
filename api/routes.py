@@ -64,8 +64,8 @@ def _build_task(
         "input_dir": str(input_dir),
         "output_dir": str(output_dir),
         "progress": {"total": 1 if playlist else len(input_files), "completed": 0, "failed": 0},
-        "results": [],
-        "errors": [],
+        "results": None,
+        "errors": None,
     }
 
 
