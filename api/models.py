@@ -71,7 +71,7 @@ class TaskResponse(ApiModel):
     created_at: str | None = Field(default=None, description="Время создания (ISO 8601)")
     updated_at: str | None = Field(default=None, description="Время обновления (ISO 8601)")
     progress: TaskProgress | None = Field(default=None, description="Прогресс обработки")
-    results: FileResult = Field(default=[], description="Результаты по каждому файлу")
+    results: FileResult | None = Field(default=None, description="Результаты по каждому файлу")
     errors: str | None = Field(default=None, description="Список ошибок")
 
 

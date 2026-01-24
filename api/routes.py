@@ -161,14 +161,28 @@ async def create_batch_task(
     description="""
 Получить текущий статус и детали задачи OMR.
 
-Возвращает прогресс обработки, промежуточные результаты и ошибки.
+## Статусы задачи
 
-**Статусы задачи:**
-- `queued`: В очереди на обработку
-- `running`: Обрабатывается
-- `completed`: Успешно завершена
-- `error`: Завершена с ошибкой
-    """,
+| Статус | Описание | Действие клиента |
+|--------|----------|------------------|
+| `queued` | В очереди на обработку | Повторить запрос через 5-10 сек |
+| `running` | Обрабатывается | Повторить запрос через 5-10 сек |
+| `completed` | Успешно завершена | Забрать результат из `results` |
+| `error` | Завершена с ошибкой | Показать ошибку из `errors` |
+
+## Поля ответа
+
+
+- **id** — id запрашиваемой задачи
+- **status** — статус запрашиваемой задачи
+- **progress.total** — общее количество файлов для обработки
+- **progress.completed** — успешно обработано
+- **progress.failed** — завершилось с ошибкой
+- **results** — массив успешных результатов с URL для скачивания
+- **results.url** — ссылка на mxl файл
+- **results.logUrl** — ссылка на log файл чтобы понять если будут ошибки что произошло
+- **errors** — массив ошибок обработки
+""",
     responses={
         200: {"description": "Детали задачи"},
         404: {"description": "Задача не найдена"},
@@ -187,8 +201,8 @@ async def get_task(task_id: str) -> TaskResponse:
         created_at=task.get("created_at"),
         updated_at=task.get("updated_at"),
         progress=task.get("progress"),
-        results=task.get("results", []),
-        errors=task.get("errors", []),
+        results=task.get("results"),
+        errors=task.get("errors"),
     )
 
 
