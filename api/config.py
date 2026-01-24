@@ -6,7 +6,6 @@ class Settings(BaseSettings):
     audiveris_args: str = "-batch -transcribe -export"
     input_dir: str = "/storage/in"
     output_dir: str = "/storage/out"
-    keep_artifacts: bool = True
     max_error_len: int = 4000
     max_listed_files: int = 25
     min_interline: int = 11

@@ -1,6 +1,5 @@
 INPUT_DIR=/storage/in
 OUTPUT_DIR=/storage/out
-KEEP_ARTIFACTS=1
 MIN_INTERLINE=11
 TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata
 JAVA_OPTS=-Xms512m -Xmx4g
