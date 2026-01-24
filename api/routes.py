@@ -90,6 +90,9 @@ async def create_single_task(
     task_id = uuid.uuid4().hex
     input_dir, output_dir = _create_task_dirs(task_id)
 
+    if file.filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="PDF пока не поддерживается")
+
     input_name = _safe_name(file.filename, "input-0")
     await _save_file(file, input_dir / input_name)
 
@@ -107,7 +110,7 @@ async def create_single_task(
 
 
 @router.post(
-    "/tasks/batch",
+    "/tasks/playlist",
     response_model=TaskCreateResponse,
     summary="Создать задачу (плейлист)",
     description="""
