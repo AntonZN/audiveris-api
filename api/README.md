@@ -40,14 +40,12 @@
 
 ## API Endpoints
 
-### POST /tasks
+### POST /tasks/single
 
-Создание задачи на распознавание.
+Создание задачи на распознавание **одного файла**.
 
 **Request:**
-- `files` (multipart/form-data) — один или несколько файлов изображений
-- `playlist` (bool, default: false) — объединить файлы в один book (один MusicXML на выходе)
-- `fail_on_error` (bool, default: true) — остановить обработку при первой ошибке
+- `file` (multipart/form-data) — один файл изображения (PNG, JPG, PDF)
 
 **Response:**
 ```json
@@ -57,31 +55,39 @@
 }
 ```
 
-**Примеры:**
+**Пример:**
 
 ```bash
-# Один файл
-curl -X POST -F "files=@score.png" http://localhost:8000/tasks
+curl -X POST -F "file=@score.png" http://localhost:8000/tasks/single
+```
 
-# Несколько файлов (каждый обрабатывается отдельно)
+---
+
+### POST /tasks/batch
+
+Создание задачи на распознавание **нескольких файлов** как единого произведения (плейлист).
+
+Все файлы объединяются в один book → на выходе один MusicXML.
+
+**Request:**
+- `files` (multipart/form-data) — несколько файлов изображений (PNG, JPG, PDF)
+
+**Response:**
+```json
+{
+  "task_id": "abc123def456",
+  "status": "queued"
+}
+```
+
+**Пример:**
+
+```bash
 curl -X POST \
   -F "files=@page1.png" \
   -F "files=@page2.png" \
-  http://localhost:8000/tasks
-
-# Playlist (все страницы → один MusicXML)
-curl -X POST \
-  -F "files=@page1.png" \
-  -F "files=@page2.png" \
-  -F "playlist=true" \
-  http://localhost:8000/tasks
-
-# Продолжить при ошибках (partial result)
-curl -X POST \
-  -F "files=@page1.png" \
-  -F "files=@page2.png" \
-  -F "fail_on_error=false" \
-  http://localhost:8000/tasks
+  -F "files=@page3.png" \
+  http://localhost:8000/tasks/batch
 ```
 
 ---
@@ -98,18 +104,11 @@ curl -X POST \
   "created_at": "2024-01-15T10:30:00Z",
   "updated_at": "2024-01-15T10:30:05Z",
   "progress": {
-    "total": 3,
-    "completed": 1,
+    "total": 1,
+    "completed": 0,
     "failed": 0
   },
-  "results": [
-    {
-      "filename": "page1.mxl",
-      "url": "http://localhost:8081/out/abc123/page1.mxl",
-      "interline": 15,
-      "log_url": "http://localhost:8081/out/abc123/page1.log"
-    }
-  ],
+  "results": [],
   "errors": []
 }
 ```
@@ -122,42 +121,10 @@ curl -X POST \
 | `running` | Обрабатывается |
 | `completed` | Успешно завершена |
 | `error` | Завершена с ошибкой |
-| `partial` | Частичный результат (fail_on_error=false) |
 
 **Пример:**
 ```bash
 curl http://localhost:8000/tasks/abc123def456
-```
-
----
-
-### GET /tasks/{task_id}/result
-
-Получение результата (только для `completed` или `partial`).
-
-**Response:**
-```json
-{
-  "task_id": "abc123def456",
-  "outputs": [
-    {
-      "filename": "score.mxl",
-      "url": "http://localhost:8081/out/abc123/score.mxl",
-      "interline": 15,
-      "log_url": "http://localhost:8081/out/abc123/score.log"
-    }
-  ],
-  "errors": []
-}
-```
-
-**Коды ошибок:**
-- `404` — задача не найдена
-- `409` — задача ещё не завершена
-
-**Пример:**
-```bash
-curl http://localhost:8000/tasks/abc123def456/result
 ```
 
 ---
@@ -193,8 +160,6 @@ curl http://localhost:8000/health
 | `MEDIA_ROOT` | `/storage` | Корень для построения URL |
 | `MEDIA_BASE_URL` | `http://localhost:8081` | Базовый URL для файлов |
 | `MEDIA_PATH_PREFIX` | `` | Префикс пути в URL |
-| `KEEP_ARTIFACTS` | `1` | Сохранять артефакты после обработки |
-| `REQUEUE_RUNNING` | `1` | Перезапускать running задачи при старте |
 
 ## Обработка ошибок
 
@@ -218,51 +183,44 @@ curl http://localhost:8000/health
 ```json
 {
   "filename": "score.png",
-  "error": "Audiveris failed (job_id=abc123). No sheet found",
+  "error": "Audiveris failed. No sheet found",
   "error_code": "processing_failed"
 }
 ```
 
 ## Режимы обработки
 
-### Одиночные файлы (playlist=false)
+### /tasks/single — Один файл
 
-Каждый файл обрабатывается независимо → каждый даёт свой MusicXML.
+Один файл → один MusicXML.
 
 ```
-files: [page1.png, page2.png, page3.png]
+file: score.png
       ↓
-results: [page1.mxl, page2.mxl, page3.mxl]
+result: score.mxl
 ```
 
-### Playlist (playlist=true)
+### /tasks/batch — Плейлист (несколько файлов)
 
 Все файлы объединяются в один book → один MusicXML.
 
 ```
 files: [page1.png, page2.png, page3.png]
       ↓
-results: [playlist.mxl]
+result: playlist.mxl
 ```
 
-Используйте playlist для многостраничных партитур.
+Используйте `/tasks/batch` для многостраничных партитур.
 
-**Внутренний процесс playlist (3 шага):**
+**Внутренний процесс playlist (2 шага):**
 
 ```
-Step 1: Транскрибирование каждого файла
-        page1.png → page1.omr
-        page2.png → page2.omr
-        page3.png → page3.omr
+Step 1: Создание compound book
+        playlist.xml (ссылки на изображения) → playlist.omr
 
-Step 2: Создание compound book
-        playlist.xml (ссылки на .omr) → playlist.omr
-
-Step 3: Экспорт
+Step 2: Транскрипция и экспорт
         playlist.omr → playlist.mxl
 ```
-
-Такой подход гарантирует, что каждый файл полностью обработан перед объединением.
 
 ## Запуск
 

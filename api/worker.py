@@ -1,3 +1,4 @@
+import shutil
 import threading
 from pathlib import Path
 
@@ -41,48 +42,33 @@ class Worker:
         input_dir = Path(task.get("input_dir", ""))
         output_dir = Path(task.get("output_dir", ""))
         playlist = task.get("playlist", False)
-        fail_on_error = task.get("fail_on_error", True)
 
         input_paths = [input_dir / fname for fname in input_files]
-        results: list[dict] = []
-        errors: list[str] = []
+        errors = None
         completed_count = 0
         failed_count = 0
 
         if playlist and len(input_paths) > 0:
             # Process all files as a single playlist (one book -> one MusicXML)
-            result = audiveris_service.process_playlist(input_paths, output_dir)
-            results.append(result.model_dump())
-            if result.error:
-                errors.append(result.error)
+            res = audiveris_service.process_playlist(input_paths, output_dir)
+            results = res.model_dump()
+
+            if res.error:
+                errors = res.error
                 failed_count = 1
             else:
                 completed_count = 1
         else:
-            # Process each file individually
-            total = len(input_paths)
-            for i, input_path in enumerate(input_paths):
-                result = audiveris_service.process_single(input_path, output_dir)
-                results.append(result.model_dump())
+            # Process single file
+            input_path = input_paths[0]
+            res = audiveris_service.process_single(input_path, output_dir)
+            results = res.model_dump()
 
-                if result.error:
-                    errors.append(result.error)
-                    failed_count += 1
-                    if fail_on_error:
-                        # Stop processing on first error
-                        break
-                else:
-                    completed_count += 1
-
-                # Update progress
-                task["progress"] = {
-                    "total": total,
-                    "completed": completed_count,
-                    "failed": failed_count,
-                }
-                task["results"] = results
-                task["errors"] = errors
-                repo.save(task)
+            if res.error:
+                errors = res.error
+                failed_count = 1
+            else:
+                completed_count = 1
 
         # Determine final status
         task["results"] = results
@@ -95,12 +81,12 @@ class Worker:
 
         if failed_count == 0:
             task["status"] = TaskStatus.completed.value
-        elif completed_count > 0 and not fail_on_error:
-            task["status"] = TaskStatus.partial.value
         else:
             task["status"] = TaskStatus.error.value
 
         repo.save(task)
+
+        shutil.rmtree(input_dir, ignore_errors=True)
 
 
 def create_workers(count: int) -> list[Worker]:

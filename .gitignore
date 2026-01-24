@@ -109,3 +109,4 @@ data/in
 data/out
 data/tasks
 .env
+Caddyfile

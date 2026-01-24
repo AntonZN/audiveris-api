@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     output_dir: str = "/storage/out"
     keep_artifacts: bool = True
     max_error_len: int = 4000
-    max_listed_files: int = 50
+    max_listed_files: int = 25
     min_interline: int = 11
     task_workers: int = 1
     media_root: str = "/storage"
@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     task_queue_key: str = "audiveris:queue"
     task_key_prefix: str = "audiveris:task:"
     requeue_running: bool = True
+    api_token: str = '123'
+    task_ttl_seconds: int = 86400
+    cleanup_interval_seconds: int = 3600
+
 
     class Config:
         env_prefix = ""

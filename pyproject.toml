@@ -3,7 +3,7 @@ name = "audiveris"
 version = "0.1.0"
 description = ""
 authors = [
-    {name = "anton",email = "a.zinoviev@sb117.ru"}
+    {name = "anton",email = "pandarado@gmail.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.12"

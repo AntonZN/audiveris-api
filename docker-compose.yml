@@ -22,6 +22,7 @@ services:
       MEDIA_ROOT: ${MEDIA_ROOT}
       MEDIA_BASE_URL: ${MEDIA_BASE_URL}
       MEDIA_PATH_PREFIX: ${MEDIA_PATH_PREFIX}
+      API_TOKEN: ${API_TOKEN}
     command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
     networks:

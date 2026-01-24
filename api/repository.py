@@ -19,7 +19,15 @@ class TaskRepository:
 
     def save(self, task: dict[str, Any]) -> None:
         task["updated_at"] = self._now()
-        self._redis.set(self._task_key(task["id"]), json.dumps(task, sort_keys=True, default=str))
+        if settings.task_ttl_seconds > 0:
+            expires_at = task.get("expires_at")
+            if not expires_at:
+                expires_at = int(datetime.now(timezone.utc).timestamp()) + settings.task_ttl_seconds
+                task["expires_at"] = expires_at
+        key = self._task_key(task["id"])
+        self._redis.set(key, json.dumps(task, sort_keys=True, default=str))
+        if settings.task_ttl_seconds > 0 and task.get("expires_at"):
+            self._redis.expireat(key, int(task["expires_at"]))
 
     def get(self, task_id: str) -> dict[str, Any] | None:
         payload = self._redis.get(self._task_key(task_id))

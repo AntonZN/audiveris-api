@@ -9,34 +9,27 @@ from api.models import FileResult
 
 
 class AudiverisService:
-    def __init__(self) -> None:
-        self._audiveris_args = settings.audiveris_args.split()
-
     def process_single(self, input_path: Path, output_dir: Path) -> FileResult:
         """Process a single input file and return a FileResult."""
         try:
             output_path, log_path, interline = self._run_audiveris(
-                input_path, output_dir, input_path.stem
+                input_path, output_dir
             )
             return FileResult(
                 filename=output_path.name,
                 url=self._build_media_url(output_path),
-                interline=interline,
                 log_url=self._build_media_url(log_path) if log_path else None,
             )
         except LowInterlineError as exc:
             return FileResult(
                 filename=input_path.name,
                 error=exc.message,
-                error_code="low_interline",
-                interline=exc.interline,
                 log_url=self._build_media_url(exc.log_path) if exc.log_path else None,
             )
         except ProcessingError as exc:
             return FileResult(
                 filename=input_path.name,
                 error=exc.message,
-                error_code="processing_failed",
                 log_url=self._build_media_url(exc.log_path) if exc.log_path else None,
             )
 
@@ -44,128 +37,40 @@ class AudiverisService:
         """Process multiple files as a playlist (single book) and return a FileResult."""
         try:
             output_path, log_path, interline = self._run_audiveris_playlist(
-                input_paths, output_dir, "playlist"
+                input_paths, output_dir
             )
             return FileResult(
                 filename=output_path.name,
                 url=self._build_media_url(output_path),
-                interline=interline,
                 log_url=self._build_media_url(log_path) if log_path else None,
             )
         except LowInterlineError as exc:
             return FileResult(
                 filename="playlist",
                 error=exc.message,
-                error_code="low_interline",
-                interline=exc.interline,
                 log_url=self._build_media_url(exc.log_path) if exc.log_path else None,
             )
         except ProcessingError as exc:
             return FileResult(
                 filename="playlist",
                 error=exc.message,
-                error_code="processing_failed",
                 log_url=self._build_media_url(exc.log_path) if exc.log_path else None,
             )
 
     def _run_audiveris(
-        self, input_path: Path, output_dir: Path, job_id: str
+            self, input_path: Path, output_dir: Path
     ) -> tuple[Path, Path, int | None]:
         """Run audiveris on a single input file."""
         cmd = [
             settings.audiveris_cmd,
-            *self._audiveris_args,
-            "-output",
+            *["-batch", "-transcribe", "-export", "-output"],
             str(output_dir),
             str(input_path),
         ]
-        return self._execute_and_process(cmd, output_dir, job_id)
-
-    def _run_audiveris_playlist(
-        self, input_paths: list[Path], output_dir: Path, job_id: str
-    ) -> tuple[Path, Path, int | None]:
-        """Run audiveris with playlist (three-step process with .omr files)."""
-        omr_files: list[Path] = []
-        all_logs: list[str] = []
-
-        # Step 1: Process each image individually to .omr
-        for i, input_path in enumerate(input_paths):
-            cmd_transcribe = [
-                settings.audiveris_cmd,
-                "-batch",
-                "-transcribe",
-                "-output",
-                str(output_dir),
-                str(input_path),
-            ]
-            result = subprocess.run(cmd_transcribe, capture_output=True, text=True)
-            all_logs.append(f"=== Processing {input_path.name} ===")
-            all_logs.append(result.stdout or "")
-            if result.stderr:
-                all_logs.append(result.stderr)
-
-            # Find the created .omr file
-            omr_file = output_dir / f"{input_path.stem}.omr"
-            if omr_file.exists():
-                omr_files.append(omr_file)
-            else:
-                # Try to find it with different name
-                found = list(output_dir.glob(f"{input_path.stem}*.omr"))
-                if found:
-                    omr_files.append(found[0])
-
-        # Write combined log
-        log_path = output_dir / "audiveris.log"
-        log_path.write_text("\n".join(all_logs))
-
-        if not omr_files:
-            detail = f"No .omr files created from images (job_id={job_id})"
-            raise ProcessingError(detail, log_path=log_path)
-
-        # Step 2: Create playlist with .omr files and build compound book
-        playlist_path = self._create_playlist_xml(omr_files, output_dir)
-        cmd_build = [
-            settings.audiveris_cmd,
-            "-batch",
-            "-playlist",
-            str(playlist_path),
-            "-output",
-            str(output_dir),
-        ]
-        result_build = subprocess.run(cmd_build, capture_output=True, text=True)
-        all_logs.append("=== Building compound book ===")
-        all_logs.append(result_build.stdout or "")
-        if result_build.stderr:
-            all_logs.append(result_build.stderr)
-        log_path.write_text("\n".join(all_logs))
-
-        if result_build.returncode != 0:
-            error = (result_build.stderr or result_build.stdout or "Playlist build failed").strip()
-            detail = f"Audiveris playlist build failed (job_id={job_id}). {error}"
-            raise ProcessingError(detail, log_path=log_path)
-
-        # Find the compound .omr file
-        compound_omr = output_dir / "playlist.omr"
-        if not compound_omr.exists():
-            omr_candidates = [f for f in output_dir.glob("*.omr") if f not in omr_files]
-            if not omr_candidates:
-                detail = f"No compound .omr file created (job_id={job_id})"
-                raise ProcessingError(detail, log_path=log_path)
-            compound_omr = omr_candidates[0]
-
-        # Step 3: Export the compound book to MusicXML
-        cmd_export = [
-            settings.audiveris_cmd,
-            "-batch",
-            "-export",
-            "-output",
-            str(output_dir),
-            str(compound_omr),
-        ]
-        return self._execute_and_process(cmd_export, output_dir, job_id)
+        return self._execute_and_process(cmd, output_dir)
 
     def _execute_and_process(
-        self, cmd: list[str], output_dir: Path, job_id: str
+            self, cmd: list[str], output_dir: Path
     ) -> tuple[Path, Path, int | None]:
         """Execute audiveris command and process results."""
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -175,14 +80,13 @@ class AudiverisService:
 
         if interline_value is not None and interline_value < settings.min_interline:
             detail = (
-                f"Image resolution too low: interline={interline_value}px < {settings.min_interline}px "
-                f"(job_id={job_id}, log={book_log})"
+                f"Image resolution too low: interline={interline_value}px < {settings.min_interline}px"
             )
             raise LowInterlineError(interline_value, detail, book_log)
 
         if result.returncode != 0:
             error = (result.stderr or result.stdout or "Audiveris failed").strip()
-            detail = f"Audiveris failed (job_id={job_id}). {error}"
+            detail = f"Audiveris failed. {error}"
             raise ProcessingError(detail, log_path=book_log)
 
         # Check for errors in stdout (Audiveris may return 0 even with errors)
@@ -192,7 +96,7 @@ class AudiverisService:
         if not candidates:
             files = self._list_files(output_dir)
             error_info = f" Errors: {processing_errors}" if processing_errors else ""
-            detail = f"No MusicXML output found (job_id={job_id}, files={files}, log={book_log}).{error_info}"
+            detail = f"No MusicXML output found, files={files}).{error_info}"
             raise ProcessingError(detail, log_path=book_log)
 
         output_path = sorted(candidates)[0]
@@ -210,8 +114,61 @@ class AudiverisService:
         playlist_path.write_text("\n".join(lines))
         return playlist_path
 
+    def _run_audiveris_playlist(
+            self, input_paths: list[Path], output_dir: Path
+    ) -> tuple[Path, Path, int | None]:
+        """Run audiveris with playlist.
+
+        Step 1: Create compound book from playlist (images -> playlist.omr)
+        Step 2: Transcribe and export the compound book
+        """
+        all_logs: list[str] = []
+
+        # Step 1: Create compound book from playlist
+        playlist_path = self._create_playlist_xml(input_paths, output_dir)
+        cmd_build = [
+            settings.audiveris_cmd,
+            "-batch",
+            "-playlist", str(playlist_path),
+            "-output", str(output_dir),
+        ]
+        result_build = subprocess.run(cmd_build, capture_output=True, text=True)
+        all_logs.append(f"=== Step 1: Build compound book ===")
+        all_logs.append(f"cmd: {' '.join(cmd_build)}")
+        all_logs.append(result_build.stdout or "")
+        if result_build.stderr:
+            all_logs.append(result_build.stderr)
+
+        # Find compound .omr file
+        compound_omr = output_dir / "playlist.omr"
+        if not compound_omr.exists():
+            log_path = output_dir / "audiveris.log"
+            log_path.write_text("\n".join(all_logs))
+            raise ProcessingError(
+                f"Compound book not created",
+                log_path=log_path
+            )
+
+        # Step 2: Transcribe and export compound book
+        cmd_export = [
+            settings.audiveris_cmd,
+            "-batch",
+            "-transcribe",
+            "-export",
+            "-output", str(output_dir),
+            str(compound_omr),
+        ]
+        all_logs.append(f"\n=== Step 2: Transcribe and export ===")
+        all_logs.append(f"cmd: {' '.join(cmd_export)}")
+
+        # Write intermediate log
+        log_path = output_dir / "audiveris.log"
+        log_path.write_text("\n".join(all_logs))
+
+        return self._execute_and_process(cmd_export, output_dir)
+
     def _write_log(
-        self, out_dir: Path, cmd: list[str], result: subprocess.CompletedProcess
+            self, out_dir: Path, cmd: list[str], result: subprocess.CompletedProcess
     ) -> Path:
         """Write audiveris execution log."""
         log_path = out_dir / "audiveris.log"
@@ -298,8 +255,8 @@ class AudiverisService:
             return "none"
         if len(files) > settings.max_listed_files:
             return (
-                ", ".join(files[: settings.max_listed_files])
-                + f", ... (+{len(files) - settings.max_listed_files} more)"
+                    ", ".join(files[: settings.max_listed_files])
+                    + f", ... (+{len(files) - settings.max_listed_files} more)"
             )
         return ", ".join(files)
 
@@ -310,9 +267,11 @@ class AudiverisService:
             rel = path.relative_to(media_root)
         except ValueError:
             return None
+
         rel_posix = quote(rel.as_posix())
         base = settings.media_base_url.rstrip("/")
         prefix = settings.media_path_prefix.strip("/")
+
         if prefix:
             return f"{base}/{prefix}/{rel_posix}"
         return f"{base}/{rel_posix}"
