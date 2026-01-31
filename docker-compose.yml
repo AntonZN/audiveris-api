@@ -22,6 +22,10 @@ services:
       MEDIA_BASE_URL: ${MEDIA_BASE_URL}
       MEDIA_PATH_PREFIX: ${MEDIA_PATH_PREFIX}
       API_TOKEN: ${API_TOKEN}
+      IMAGE_MIN_DIMENSION: ${IMAGE_MIN_DIMENSION:-1800}
+      IMAGE_UPSCALE_FACTOR: ${IMAGE_UPSCALE_FACTOR:-2.0}
+      IMAGE_CONTRAST_FACTOR: ${IMAGE_CONTRAST_FACTOR:-1.2}
+      IMAGE_SHARPNESS_FACTOR: ${IMAGE_SHARPNESS_FACTOR:-1.5}
     command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
     networks:
