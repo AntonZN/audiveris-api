@@ -3,12 +3,50 @@ import subprocess
 from pathlib import Path
 from urllib.parse import quote
 
+from PIL import Image, ImageEnhance
+
 from api.config import settings
 from api.exceptions import LowInterlineError, ProcessingError
 from api.models import FileResult
 
 
 class AudiverisService:
+    def _preprocess_image(self, input_path: Path) -> None:
+        """Preprocess image: upscale if small, enhance contrast and sharpness."""
+        if input_path.suffix.lower() == ".pdf":
+            return  # Skip PDF files
+
+        try:
+            with Image.open(input_path) as img:
+                needs_upscale = (
+                    img.width < settings.image_min_dimension
+                    or img.height < settings.image_min_dimension
+                )
+
+                if needs_upscale:
+                    factor = settings.image_upscale_factor
+                    new_size = (int(img.width * factor), int(img.height * factor))
+                    img = img.resize(new_size, Image.Resampling.LANCZOS)
+                else:
+                    return
+
+                # Enhance contrast
+                if settings.image_contrast_factor != 1.0:
+                    enhancer = ImageEnhance.Contrast(img)
+                    img = enhancer.enhance(settings.image_contrast_factor)
+
+                # Enhance sharpness
+                if settings.image_sharpness_factor != 1.0:
+                    enhancer = ImageEnhance.Sharpness(img)
+                    img = enhancer.enhance(settings.image_sharpness_factor)
+
+                # Save back if any changes were made
+                if needs_upscale or settings.image_contrast_factor != 1.0 or settings.image_sharpness_factor != 1.0:
+                    img.save(input_path)
+
+        except Exception:
+            pass  # If preprocessing fails, continue with original image
+
     def process_single(self, input_path: Path, output_dir: Path) -> FileResult:
         """Process a single input file and return a FileResult."""
         try:
@@ -61,10 +99,13 @@ class AudiverisService:
             self, input_path: Path, output_dir: Path
     ) -> tuple[Path, Path, int | None]:
         """Run audiveris on a single input file."""
+        self._preprocess_image(input_path)
         cmd = [
             settings.audiveris_cmd,
-            *["-batch", "-transcribe", "-export", "-output"],
-            str(output_dir),
+            "-batch",
+            "-constant", f"org.audiveris.omr.sheet.ScaleBuilder.minInterline={settings.min_interline}",
+            "-transcribe", "-export",
+            "-output", str(output_dir),
             str(input_path),
         ]
         return self._execute_and_process(cmd, output_dir)
@@ -124,11 +165,16 @@ class AudiverisService:
         """
         all_logs: list[str] = []
 
+        # Preprocess all input images
+        for input_path in input_paths:
+            self._preprocess_image(input_path)
+
         # Step 1: Create compound book from playlist
         playlist_path = self._create_playlist_xml(input_paths, output_dir)
         cmd_build = [
             settings.audiveris_cmd,
             "-batch",
+            "-constant", f"org.audiveris.omr.sheet.ScaleBuilder.minInterline={settings.min_interline}",
             "-playlist", str(playlist_path),
             "-output", str(output_dir),
         ]
@@ -153,6 +199,7 @@ class AudiverisService:
         cmd_export = [
             settings.audiveris_cmd,
             "-batch",
+            "-constant", f"org.audiveris.omr.sheet.ScaleBuilder.minInterline={settings.min_interline}",
             "-transcribe",
             "-export",
             "-output", str(output_dir),

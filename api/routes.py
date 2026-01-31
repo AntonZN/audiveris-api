@@ -1,8 +1,10 @@
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, Depends
+from pypdf import PdfReader
 
 from api.config import settings
 from api.deps import get_api_key
@@ -35,6 +37,32 @@ async def _save_file(file: UploadFile, path: Path) -> None:
             if not chunk:
                 break
             handle.write(chunk)
+
+
+def _get_pdf_page_count(path: Path) -> int:
+    """Получить количество страниц в PDF файле."""
+    reader = PdfReader(path)
+    return len(reader.pages)
+
+
+# Magic bytes для поддерживаемых форматов
+MAGIC_PDF = b"%PDF"
+MAGIC_PNG = b"\x89PNG"
+MAGIC_JPEG = b"\xff\xd8\xff"
+
+
+def _detect_file_type(path: Path) -> str | None:
+    """Определить тип файла по magic bytes."""
+    with path.open("rb") as f:
+        header = f.read(8)
+
+    if header.startswith(MAGIC_PDF):
+        return "pdf"
+    if header.startswith(MAGIC_PNG):
+        return "png"
+    if header.startswith(MAGIC_JPEG):
+        return "jpeg"
+    return None
 
 
 def _create_task_dirs(task_id: str) -> tuple[Path, Path]:
@@ -76,25 +104,46 @@ def _build_task(
     description="""
 Создать задачу на распознавание одного файла с нотами.
 
-Загрузите один файл изображения (PNG, JPG) с нотами.
+Загрузите один файл изображения (PNG, JPG) или PDF (до 5 страниц) с нотами.
 Задача будет добавлена в очередь на обработку Audiveris.
 """,
     responses={
         200: {"description": "Задача успешно создана"},
+        400: {"description": "Неподдерживаемый формат или PDF превышает лимит в 5 страниц"},
     },
 )
 async def create_single_task(
-    file: UploadFile = File(..., description="Файл изображения (PNG, JPG)"),
+    file: UploadFile = File(..., description="Файл изображения (PNG, JPG) или PDF (до 5 страниц)"),
 ) -> TaskCreateResponse:
     """Создать задачу OMR для одного файла."""
     task_id = uuid.uuid4().hex
     input_dir, output_dir = _create_task_dirs(task_id)
 
-    if file.filename.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="PDF пока не поддерживается")
-
     input_name = _safe_name(file.filename, "input-0")
-    await _save_file(file, input_dir / input_name)
+    input_path = input_dir / input_name
+    await _save_file(file, input_path)
+
+    file_type = _detect_file_type(input_path)
+    print(file_type)
+    if file_type is None:
+        input_path.unlink()
+        input_dir.rmdir()
+        output_dir.rmdir()
+        raise HTTPException(
+            status_code=400,
+            detail="Неподдерживаемый формат файла. Разрешены: PNG, JPG, PDF",
+        )
+
+    if file_type == "pdf":
+        page_count = _get_pdf_page_count(input_path)
+        if page_count > 5:
+            input_path.unlink()
+            input_dir.rmdir()
+            output_dir.rmdir()
+            raise HTTPException(
+                status_code=400,
+                detail=f"PDF содержит {page_count} страниц, максимум разрешено 5",
+            )
 
     task = _build_task(
         task_id=task_id,

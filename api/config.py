@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     output_dir: str = "/storage/out"
     max_error_len: int = 4000
     max_listed_files: int = 25
-    min_interline: int = 11
+    min_interline: int = 9
     task_workers: int = 1
     media_root: str = "/storage"
     media_base_url: str = "http://localhost:8081"
@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     api_token: str = '123'
     task_ttl_seconds: int = 86400
     cleanup_interval_seconds: int = 3600
+    max_pdf_pages: int = 5
+    # Image preprocessing
+    image_min_dimension: int = 2000  # Minimum width/height to skip upscale
+    image_upscale_factor: float = 2.0  # Upscale multiplier
+    image_contrast_factor: float = 1.2  # Contrast enhancement
+    image_sharpness_factor: float = 1.5  # Sharpness enhancement
 
 
     class Config:

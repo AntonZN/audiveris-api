@@ -13,7 +13,9 @@ dependencies = [
     "python-multipart (>=0.0.21,<0.0.22)",
     "watchfiles (>=1.1.1,<2.0.0)",
     "redis (>=7.1.0,<8.0.0)",
-    "pydantic-settings (>=2.12.0,<3.0.0)"
+    "pydantic-settings (>=2.12.0,<3.0.0)",
+    "pypdf (>=5.0.0,<6.0.0)",
+    "pillow (>=11.0.0,<12.0.0)"
 ]
 
 

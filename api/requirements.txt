@@ -4,3 +4,5 @@ python-multipart==0.0.9
 watchfiles==0.24.0
 redis==5.0.8
 pydantic-settings==2.2.1
+pypdf==5.1.0
+pillow==11.1.0
