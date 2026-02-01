@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, Depends
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, Depends
 from pypdf import PdfReader
 
 from api.config import settings
@@ -14,6 +14,7 @@ from api.models import (
     TaskResponse,
     TaskStatus,
 )
+from api.presets import Preset
 from api.repository import repo
 
 router = APIRouter(tags=["API"], dependencies=[Depends(get_api_key)])
@@ -80,6 +81,7 @@ def _build_task(
     output_dir: Path,
     input_files: list[str],
     playlist: bool,
+    preset: str = "default",
 ) -> dict:
     """Создать словарь задачи."""
     return {
@@ -88,6 +90,7 @@ def _build_task(
         "created_at": _now(),
         "updated_at": _now(),
         "playlist": playlist,
+        "preset": preset,
         "input_files": input_files,
         "input_dir": str(input_dir),
         "output_dir": str(output_dir),
@@ -106,6 +109,20 @@ def _build_task(
 
 Загрузите один файл изображения (PNG, JPG) или PDF (до 5 страниц) с нотами.
 Задача будет добавлена в очередь на обработку Audiveris.
+
+## Пресеты
+
+| Пресет | Описание |
+|--------|----------|
+| `default` | Стандартные ноты (Bravura) |
+| `jazz` | Джаз с аккордами (FinaleJazz) |
+| `drums` | Барабаны 5-линейные (JazzPerc) |
+| `drums_1line` | Барабаны 1-линейные |
+| `guitar` | Гитара с табулатурой и аппликатурой |
+| `bass` | Бас-гитара |
+| `vocal` | Вокал с текстом (не проверял, не понятно что проверять, но режим существует)|
+| `piano` | Фортепиано |
+| `small_notes` | Ноты с cue/маленькими нотами |
 """,
     responses={
         200: {"description": "Задача успешно создана"},
@@ -114,6 +131,7 @@ def _build_task(
 )
 async def create_single_task(
     file: UploadFile = File(..., description="Файл изображения (PNG, JPG) или PDF (до 5 страниц)"),
+    preset: Preset = Form(Preset.default, description="Пресет обработки"),
 ) -> TaskCreateResponse:
     """Создать задачу OMR для одного файла."""
     task_id = uuid.uuid4().hex
@@ -151,6 +169,7 @@ async def create_single_task(
         output_dir=output_dir,
         input_files=[input_name],
         playlist=False,
+        preset=preset.value,
     )
     repo.save(task)
     repo.enqueue(task_id)
@@ -168,6 +187,20 @@ async def create_single_task(
 Загрузите несколько файлов изображений (PNG, JPG) с нотами.
 Все файлы будут объединены в один book и обработаны вместе.
 На выходе — один MusicXML файл.
+
+## Пресеты
+
+| Пресет | Описание |
+|--------|----------|
+| `default` | Стандартные ноты (Bravura) |
+| `jazz` | Джаз с аккордами (FinaleJazz) |
+| `drums` | Барабаны 5-линейные (JazzPerc) |
+| `drums_1line` | Барабаны 1-линейные |
+| `guitar` | Гитара с табулатурой и аппликатурой |
+| `bass` | Бас-гитара |
+| `vocal` | Вокал с текстом |
+| `piano` | Фортепиано |
+| `small_notes` | Ноты с cue/маленькими нотами |
 """,
     responses={
         200: {"description": "Задача успешно создана"},
@@ -176,6 +209,7 @@ async def create_single_task(
 )
 async def create_batch_task(
     files: list[UploadFile] = File(..., description="Файлы изображений (PNG, JPG)"),
+    preset: Preset = Form(Preset.default, description="Пресет обработки"),
 ) -> TaskCreateResponse:
     """Создать задачу OMR для нескольких файлов (плейлист)."""
     if not files:
@@ -196,6 +230,7 @@ async def create_batch_task(
         output_dir=output_dir,
         input_files=input_files,
         playlist=True,
+        preset=preset.value,
     )
     repo.save(task)
     repo.enqueue(task_id)
@@ -253,6 +288,27 @@ async def get_task(task_id: str) -> TaskResponse:
         results=task.get("results"),
         errors=task.get("errors"),
     )
+
+
+@router.get(
+    "/presets",
+    summary="Список пресетов",
+    description="Получить список доступных пресетов обработки.",
+)
+async def list_presets() -> dict:
+    """Получить список доступных пресетов."""
+    from api.presets import PRESET_CONSTANTS, get_preset_description
+
+    return {
+        "presets": [
+            {
+                "name": preset.value,
+                "description": get_preset_description(preset),
+                "constants": PRESET_CONSTANTS.get(preset, []),
+            }
+            for preset in Preset
+        ]
+    }
 
 
 @router.get(

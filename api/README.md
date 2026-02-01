@@ -67,6 +67,7 @@ curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:8000/tasks/...
 
 **Request:**
 - `file` (multipart/form-data) — файл изображения или PDF
+- `preset` (form field, optional) — пресет обработки (см. ниже)
 
 **Response:**
 ```json
@@ -79,9 +80,17 @@ curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:8000/tasks/...
 **Пример:**
 
 ```bash
+# Стандартная обработка
 curl -X POST \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -F "file=@score.png" \
+  http://localhost:8000/tasks/single
+
+# С пресетом для барабанов
+curl -X POST \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -F "file=@drums.png" \
+  -F "preset=drums" \
   http://localhost:8000/tasks/single
 ```
 
@@ -99,6 +108,7 @@ curl -X POST \
 
 **Request:**
 - `files` (multipart/form-data) — несколько файлов изображений (PNG, JPG)
+- `preset` (form field, optional) — пресет обработки (см. ниже)
 
 **Response:**
 ```json
@@ -116,6 +126,7 @@ curl -X POST \
   -F "files=@page1.png" \
   -F "files=@page2.png" \
   -F "files=@page3.png" \
+  -F "preset=jazz" \
   http://localhost:8000/tasks/playlist
 ```
 
@@ -162,6 +173,34 @@ curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:8000/tasks/abc123def
 
 ---
 
+### GET /presets
+
+Получить список доступных пресетов обработки.
+
+**Response:**
+```json
+{
+  "presets": [
+    {
+      "name": "default",
+      "description": "Standard classical/sheet music (Bravura font)",
+      "constants": []
+    },
+    {
+      "name": "drums",
+      "description": "Drum notation on 5-line staves (JazzPerc font)",
+      "constants": [
+        "org.audiveris.omr.ui.symbol.MusicFont.defaultMusicFamily=JazzPerc",
+        "org.audiveris.omr.sheet.ProcessingSwitches.drumNotation=true",
+        "org.audiveris.omr.sheet.ProcessingSwitches.crossHeads=true"
+      ]
+    }
+  ]
+}
+```
+
+---
+
 ### GET /health
 
 Health check (не требует авторизации).
@@ -173,6 +212,36 @@ Health check (не требует авторизации).
   "queueDepth": 5
 }
 ```
+
+## Пресеты обработки
+
+Пресеты позволяют оптимизировать распознавание для разных типов музыки/инструментов.
+
+**Подробная документация:** [PRESETS.md](PRESETS.md)
+
+| Пресет | Описание | Шрифт |
+|--------|----------|-------|
+| `default` | Стандартные ноты (классика) | Bravura |
+| `jazz` | Джаз с названиями аккордов | FinaleJazz |
+| `drums` | Барабаны на 5-линейном стане | JazzPerc |
+| `drums_1line` | Барабаны на 1-линейном стане | JazzPerc |
+| `guitar` | Гитара (табы, аппликатура, лады, аккорды) | Bravura |
+| `bass` | Бас-гитара (4-линейные табы) | Bravura |
+| `vocal` | Вокал/хор (текст сверху и снизу) | Bravura |
+| `piano` | Фортепиано (артикуляция) | Bravura |
+| `small_notes` | Ноты с cue/маленькими нотами | Bravura |
+
+### Важно: drums пресет
+
+Пресет `drums` предназначен **только** для настоящей drum нотации с перкуссионным ключом.
+Не используйте его для обычных нот — получите ошибку.
+
+Где взять тестовые drum ноты:
+- [Redeye Percussion](https://www.redeyepercussion.com/) — рекомендовано Audiveris
+- [TheDrumNinja](https://thedrumninja.com/drum-transcriptions/)
+- [Stephen Mack](https://www.stephenmack.space/drumming)
+
+Подробнее см. [PRESETS.md](PRESETS.md#drums)
 
 ## Предобработка изображений
 

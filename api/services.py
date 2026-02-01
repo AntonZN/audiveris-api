@@ -8,6 +8,7 @@ from PIL import Image, ImageEnhance
 from api.config import settings
 from api.exceptions import LowInterlineError, ProcessingError
 from api.models import FileResult
+from api.presets import Preset, get_preset_args
 
 
 class AudiverisService:
@@ -47,11 +48,13 @@ class AudiverisService:
         except Exception:
             pass  # If preprocessing fails, continue with original image
 
-    def process_single(self, input_path: Path, output_dir: Path) -> FileResult:
+    def process_single(
+        self, input_path: Path, output_dir: Path, preset: str = "default"
+    ) -> FileResult:
         """Process a single input file and return a FileResult."""
         try:
             output_path, log_path, interline = self._run_audiveris(
-                input_path, output_dir
+                input_path, output_dir, preset
             )
             return FileResult(
                 filename=output_path.name,
@@ -71,11 +74,13 @@ class AudiverisService:
                 log_url=self._build_media_url(exc.log_path) if exc.log_path else None,
             )
 
-    def process_playlist(self, input_paths: list[Path], output_dir: Path) -> FileResult:
+    def process_playlist(
+        self, input_paths: list[Path], output_dir: Path, preset: str = "default"
+    ) -> FileResult:
         """Process multiple files as a playlist (single book) and return a FileResult."""
         try:
             output_path, log_path, interline = self._run_audiveris_playlist(
-                input_paths, output_dir
+                input_paths, output_dir, preset
             )
             return FileResult(
                 filename=output_path.name,
@@ -96,14 +101,20 @@ class AudiverisService:
             )
 
     def _run_audiveris(
-            self, input_path: Path, output_dir: Path
+            self, input_path: Path, output_dir: Path, preset: str = "default"
     ) -> tuple[Path, Path, int | None]:
         """Run audiveris on a single input file."""
         self._preprocess_image(input_path)
+
+        # Build command with preset
+        preset_enum = Preset(preset) if preset else Preset.default
+        preset_args = get_preset_args(preset_enum)
+
         cmd = [
             settings.audiveris_cmd,
             "-batch",
             "-constant", f"org.audiveris.omr.sheet.ScaleBuilder.minInterline={settings.min_interline}",
+            *preset_args,
             "-transcribe", "-export",
             "-output", str(output_dir),
             str(input_path),
@@ -156,7 +167,7 @@ class AudiverisService:
         return playlist_path
 
     def _run_audiveris_playlist(
-            self, input_paths: list[Path], output_dir: Path
+            self, input_paths: list[Path], output_dir: Path, preset: str = "default"
     ) -> tuple[Path, Path, int | None]:
         """Run audiveris with playlist.
 
@@ -164,6 +175,10 @@ class AudiverisService:
         Step 2: Transcribe and export the compound book
         """
         all_logs: list[str] = []
+
+        # Build preset args
+        preset_enum = Preset(preset) if preset else Preset.default
+        preset_args = get_preset_args(preset_enum)
 
         # Preprocess all input images
         for input_path in input_paths:
@@ -175,6 +190,7 @@ class AudiverisService:
             settings.audiveris_cmd,
             "-batch",
             "-constant", f"org.audiveris.omr.sheet.ScaleBuilder.minInterline={settings.min_interline}",
+            *preset_args,
             "-playlist", str(playlist_path),
             "-output", str(output_dir),
         ]
@@ -200,6 +216,7 @@ class AudiverisService:
             settings.audiveris_cmd,
             "-batch",
             "-constant", f"org.audiveris.omr.sheet.ScaleBuilder.minInterline={settings.min_interline}",
+            *preset_args,
             "-transcribe",
             "-export",
             "-output", str(output_dir),

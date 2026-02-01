@@ -42,6 +42,7 @@ class Worker:
         input_dir = Path(task.get("input_dir", ""))
         output_dir = Path(task.get("output_dir", ""))
         playlist = task.get("playlist", False)
+        preset = task.get("preset", "default")
 
         input_paths = [input_dir / fname for fname in input_files]
         errors = None
@@ -50,7 +51,7 @@ class Worker:
 
         if playlist and len(input_paths) > 0:
             # Process all files as a single playlist (one book -> one MusicXML)
-            res = audiveris_service.process_playlist(input_paths, output_dir)
+            res = audiveris_service.process_playlist(input_paths, output_dir, preset)
             results = res.model_dump()
 
             if res.error:
@@ -61,7 +62,7 @@ class Worker:
         else:
             # Process single file
             input_path = input_paths[0]
-            res = audiveris_service.process_single(input_path, output_dir)
+            res = audiveris_service.process_single(input_path, output_dir, preset)
             results = res.model_dump()
 
             if res.error:
