@@ -35,7 +35,7 @@ RUN mkdir -p /opt \
     && ln -s /opt/audiveris/bin/Audiveris /usr/local/bin/audiveris \
     && rm /tmp/audiveris.tar
 
-ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata
+ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/4.00/tessdata
 ENV INPUT_DIR=/data/in
 ENV OUTPUT_DIR=/data/out
 ENV KEEP_ARTIFACTS=1

@@ -50,12 +50,14 @@ def _get_pdf_page_count(path: Path) -> int:
 MAGIC_PDF = b"%PDF"
 MAGIC_PNG = b"\x89PNG"
 MAGIC_JPEG = b"\xff\xd8\xff"
+MAGIC_WEBP_RIFF = b"RIFF"
+MAGIC_WEBP_WEBP = b"WEBP"
 
 
 def _detect_file_type(path: Path) -> str | None:
     """Определить тип файла по magic bytes."""
     with path.open("rb") as f:
-        header = f.read(8)
+        header = f.read(12)
 
     if header.startswith(MAGIC_PDF):
         return "pdf"
@@ -63,6 +65,8 @@ def _detect_file_type(path: Path) -> str | None:
         return "png"
     if header.startswith(MAGIC_JPEG):
         return "jpeg"
+    if header.startswith(MAGIC_WEBP_RIFF) and header[8:12] == MAGIC_WEBP_WEBP:
+        return "webp"
     return None
 
 
@@ -107,7 +111,7 @@ def _build_task(
     description="""
 Создать задачу на распознавание одного файла с нотами.
 
-Загрузите один файл изображения (PNG, JPG) или PDF (до 5 страниц) с нотами.
+Загрузите один файл изображения (PNG, JPG, WebP) или PDF (до 5 страниц) с нотами.
 Задача будет добавлена в очередь на обработку Audiveris.
 
 ## Пресеты
@@ -126,11 +130,11 @@ def _build_task(
 """,
     responses={
         200: {"description": "Задача успешно создана"},
-        400: {"description": "Неподдерживаемый формат или PDF превышает лимит в 5 страниц"},
+        400: {"description": "Неподдерживаемый формат (разрешены: PNG, JPG, WebP, PDF) или PDF превышает лимит в 5 страниц"},
     },
 )
 async def create_single_task(
-    file: UploadFile = File(..., description="Файл изображения (PNG, JPG) или PDF (до 5 страниц)"),
+    file: UploadFile = File(..., description="Файл изображения (PNG, JPG, WebP) или PDF (до 5 страниц)"),
     preset: Preset = Form(Preset.default, description="Пресет обработки"),
 ) -> TaskCreateResponse:
     """Создать задачу OMR для одного файла."""
@@ -149,7 +153,7 @@ async def create_single_task(
         output_dir.rmdir()
         raise HTTPException(
             status_code=400,
-            detail="Неподдерживаемый формат файла. Разрешены: PNG, JPG, PDF",
+            detail="Неподдерживаемый формат файла. Разрешены: PNG, JPG, WebP, PDF",
         )
 
     if file_type == "pdf":

@@ -427,6 +427,10 @@ public abstract class Voices
             for (MeasureStack stack : system.getStacks()) {
                 final Measure measure = stack.getMeasureAt(part);
 
+                if (measure == null) {
+                    continue; // Skip tablature parts without traditional measures
+                }
+
                 measure.purgeVoices();
                 measure.sortVoices();
                 measure.renameVoices();

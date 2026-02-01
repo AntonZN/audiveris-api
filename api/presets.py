@@ -47,12 +47,13 @@ PRESET_CONSTANTS: dict[Preset, list[str]] = {
     ],
 
     Preset.guitar: [
-        f"{_PREFIX}.sixStringTablatures=true",
+        # f"{_PREFIX}.sixStringTablatures=true",
         f"{_PREFIX}.fingerings=true",
         f"{_PREFIX}.frets=true",
         f"{_PREFIX}.pluckings=true",
         f"{_PREFIX}.chordNames=true",
     ],
+
 
     Preset.bass: [
         f"{_PREFIX}.fourStringTablatures=true",

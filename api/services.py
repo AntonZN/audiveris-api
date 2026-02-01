@@ -12,10 +12,31 @@ from api.presets import Preset, get_preset_args
 
 
 class AudiverisService:
-    def _preprocess_image(self, input_path: Path) -> None:
-        """Preprocess image: upscale if small, enhance contrast and sharpness."""
+    def _convert_webp_to_jpg(self, input_path: Path) -> Path:
+        """Convert WebP image to JPG (Audiveris doesn't support WebP)."""
+        if input_path.suffix.lower() != ".webp":
+            return input_path
+
+        jpg_path = input_path.with_suffix(".jpg")
+        try:
+            with Image.open(input_path) as img:
+                # Convert to RGB if necessary (WebP may have alpha channel)
+                if img.mode in ("RGBA", "LA", "P"):
+                    img = img.convert("RGB")
+                img.save(jpg_path, "JPEG", quality=95)
+            # Remove original WebP file
+            input_path.unlink()
+            return jpg_path
+        except Exception:
+            return input_path  # If conversion fails, try with original
+
+    def _preprocess_image(self, input_path: Path) -> Path:
+        """Preprocess image: convert WebP, upscale if small, enhance contrast and sharpness."""
         if input_path.suffix.lower() == ".pdf":
-            return  # Skip PDF files
+            return input_path  # Skip PDF files
+
+        # Convert WebP to JPG first
+        input_path = self._convert_webp_to_jpg(input_path)
 
         try:
             with Image.open(input_path) as img:
@@ -29,7 +50,7 @@ class AudiverisService:
                     new_size = (int(img.width * factor), int(img.height * factor))
                     img = img.resize(new_size, Image.Resampling.LANCZOS)
                 else:
-                    return
+                    return input_path
 
                 # Enhance contrast
                 if settings.image_contrast_factor != 1.0:
@@ -47,6 +68,8 @@ class AudiverisService:
 
         except Exception:
             pass  # If preprocessing fails, continue with original image
+
+        return input_path
 
     def process_single(
         self, input_path: Path, output_dir: Path, preset: str = "default"
@@ -104,7 +127,7 @@ class AudiverisService:
             self, input_path: Path, output_dir: Path, preset: str = "default"
     ) -> tuple[Path, Path, int | None]:
         """Run audiveris on a single input file."""
-        self._preprocess_image(input_path)
+        input_path = self._preprocess_image(input_path)
 
         # Build command with preset
         preset_enum = Preset(preset) if preset else Preset.default
@@ -180,12 +203,11 @@ class AudiverisService:
         preset_enum = Preset(preset) if preset else Preset.default
         preset_args = get_preset_args(preset_enum)
 
-        # Preprocess all input images
-        for input_path in input_paths:
-            self._preprocess_image(input_path)
+        # Preprocess all input images (may convert WebP to JPG)
+        processed_paths = [self._preprocess_image(p) for p in input_paths]
 
         # Step 1: Create compound book from playlist
-        playlist_path = self._create_playlist_xml(input_paths, output_dir)
+        playlist_path = self._create_playlist_xml(processed_paths, output_dir)
         cmd_build = [
             settings.audiveris_cmd,
             "-batch",
