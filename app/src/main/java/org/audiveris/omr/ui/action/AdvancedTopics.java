@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -58,6 +58,16 @@ public abstract class AdvancedTopics
         return constants.processSystemsInParallel.isSet();
     }
 
+    /**
+     * Report whether a multiple delete is allowed without user confirmation
+     *
+     * @return true if so
+     */
+    public static boolean allowMultipleDelete ()
+    {
+        return constants.multipleDelete.isSet();
+    }
+
     //~ Inner Classes ------------------------------------------------------------------------------
 
     //-----------//
@@ -73,6 +83,10 @@ public abstract class AdvancedTopics
         final Constant.Boolean processSystemsInParallel = new Constant.Boolean(
                 false,
                 "Systems processed in parallel for relevant steps");
+
+        final Constant.Boolean multipleDelete = new Constant.Boolean(
+                false,
+                "Multiple delete without user confirmation");
 
         final Constant.Boolean useSamples = new Constant.Boolean(
                 false,

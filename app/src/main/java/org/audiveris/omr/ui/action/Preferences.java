@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -169,6 +169,7 @@ public abstract class Preferences
                     "6dlu" // Title height
                             + ",pref" // Scaling
                             + ",1dlu,pref" // Locale
+                            + ",1dlu,pref" // Topic
                             + ",1dlu,pref" // Topic
                             + ",1dlu,pref" // Topic
                             + ",1dlu,pref" // Topic
@@ -634,7 +635,8 @@ public abstract class Preferences
                     "fill:pref",
                     "6dlu" // Title height
                             + ",pref" // Topic1
-                            + ",1dlu,pref"); // Topic2
+                            + ",1dlu,pref" // Topic2
+                            + ",1dlu,pref"); // Topic3
             final FormBuilder builder = FormBuilder.create().layout(layout).panel(this);
             int r = 0;
 
@@ -659,6 +661,7 @@ public abstract class Preferences
         // Standard
         SWAPPED_SHEETS(AdvancedTopics.constants.swapProcessedSheets),
         PARALLEL_SYSTEMS(AdvancedTopics.constants.processSystemsInParallel),
+        MULTIPLE_DELETE(AdvancedTopics.constants.multipleDelete),
 
         // Advanced
         SAMPLES(AdvancedTopics.constants.useSamples),
@@ -694,7 +697,7 @@ public abstract class Preferences
         public boolean isAdvanced ()
         {
             return switch (this) {
-                case SWAPPED_SHEETS, PARALLEL_SYSTEMS -> false;
+                case SWAPPED_SHEETS, PARALLEL_SYSTEMS, MULTIPLE_DELETE -> false;
                 default -> true;
             };
         }

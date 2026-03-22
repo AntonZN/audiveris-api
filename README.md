@@ -1,3 +1,21 @@
+# WARNING
+### Beware of site [audiveris.com](https://audiveris.com/)!
+
+```diff
+- The site https://audiveris.com  (note the `.com` extension)
+-  has nothing to do with Audiveris and seems to be a fraudulent site.
+```
+
+![](https://github.com/Audiveris/audiveris.github.io/blob/master/assets/images/audiveris.com.png)
+
+```diff
+- The site is aesthetically pleasing
+-  and looks like an advertisement for Audiveris software.
+- However, users report that links redirect to pages
+-  dedicated to cryptocurrencies, sports betting, etc.
+- It has all the hallmarks of a phishing site…
+```
+
 ![](https://github.com/Audiveris/docs/blob/master/images/SplashLogo.png)
 Logo crafted by [Katka](https://www.facebook.com/katkastreetart/)
 

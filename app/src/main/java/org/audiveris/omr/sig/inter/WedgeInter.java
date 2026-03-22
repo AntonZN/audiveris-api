@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -279,6 +279,30 @@ public class WedgeInter
         } else {
             return l2.getY2() - l1.getY2();
         }
+    }
+
+    //----------//
+    // getChord //
+    //----------//
+    /**
+     * Report the chord linked to this wedge on the provided side.
+     *
+     * @param side the provided side
+     * @return the linked chord, if any, otherwise null
+     */
+    public AbstractChordInter getChord (HorizontalSide side)
+    {
+        if (sig != null) {
+            for (org.audiveris.omr.sig.relation.Relation rel : sig.edgesOf(this)) {
+                if (rel instanceof ChordWedgeRelation chordWedgeRelation) {
+                    if (chordWedgeRelation.getSide() == side) {
+                        return (AbstractChordInter) sig.getOppositeInter(this, rel);
+                    }
+                }
+            }
+        }
+
+        return null;
     }
 
     //-------------//

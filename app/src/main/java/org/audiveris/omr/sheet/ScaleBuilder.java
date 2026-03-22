@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -232,7 +232,7 @@ public class ScaleBuilder
                 blackPeak.max,
                 (int) Math.rint(constants.beamMinFraction.getValue() * largerInterline));
         final int maxHeight = Math.min(
-                largerInterline - blackPeak.main,
+                largerInterline - blackPeak.min / 2,
                 (int) Math.rint(constants.beamMaxFraction.getValue() * largerInterline));
         final double beamRatio = constants.beamRangeRatio.getValue();
         beamGuess = (int) Math.rint(maxHeight * beamRatio);
@@ -387,6 +387,10 @@ public class ScaleBuilder
             beamScale = new BeamScale(beamGuess, true);
         }
 
+        // Normalized black jitter
+        final double jitter = (lineScale.max - lineScale.min) / (double) interlineScale.main;
+        logger.info(String.format("Normalized black jitter: %.2f %%", 100 * jitter));
+
         return new Scale(interlineScale, lineScale, beamScale, smallInterlineScale, smallBeamScale);
     }
 
@@ -477,6 +481,10 @@ public class ScaleBuilder
                 0.001,
                 "Minimum ratio of foreground pixels in image");
 
+        private final Constant.Ratio minSecondRatio = new Constant.Ratio(
+                1.2,
+                "Minimum ratio between second and first combined peak");
+
         private final Constant.Ratio maxSecondRatio = new Constant.Ratio(
                 1.9, // 2.0 led to a false second peak in merged grand staff
                 "Maximum ratio between second and first combined peak");
@@ -486,7 +494,7 @@ public class ScaleBuilder
                 "Minimum ratio between beam height and interline");
 
         private final Constant.Ratio beamMaxFraction = new Constant.Ratio(
-                0.85,
+                0.95,
                 "Maximum ratio between beam height and interline");
 
         private final Constant.Ratio beamMinCountRatio = new Constant.Ratio(
@@ -578,7 +586,7 @@ public class ScaleBuilder
             }
 
             if (logger.isDebugEnabled()) {
-                blackFunction.print(System.out);
+                blackFunction.print("Blacks:", maxBlack, System.out);
             }
         }
 
@@ -631,7 +639,7 @@ public class ScaleBuilder
             }
 
             if (logger.isDebugEnabled()) {
-                comboFunction.print(System.out);
+                comboFunction.print("Combos:", maxWhite, System.out);
             }
         }
 
@@ -741,13 +749,17 @@ public class ScaleBuilder
                 final Range p = it.next();
                 final int min = Math.min(p.main, comboPeak.main);
                 final int max = Math.max(p.main, comboPeak.main);
+                final double ratio = (double) max / min;
 
-                if (((double) max / min) > constants.maxSecondRatio.getValue()) {
+                if (ratio > constants.maxSecondRatio.getValue()) {
                     logger.debug("Other combo peak too different {}, discarded", p);
                     it.remove();
-                } else if (Math.abs(p.main - comboPeak.main) < blackPeak.main) {
+                } else if (ratio < constants.minSecondRatio.getValue()) {
                     logger.debug("Merging two close combo peaks {} & {}", comboPeak, p);
-                    comboPeak = new Range(min, (p.main + comboPeak.main) / 2, max);
+                    comboPeak = new Range(
+                            Math.min(p.min, comboPeak.min),
+                            (p.main + comboPeak.main) / 2,
+                            Math.max(p.max, comboPeak.max));
                     it.remove();
                 }
             }
@@ -812,6 +824,7 @@ public class ScaleBuilder
             }
 
             if (blackPeaks.size() > 1) {
+                // Beside the line peak, we also have a significant beam peak
                 final Range p0 = blackPeaks.get(0);
                 final Range p1 = blackPeaks.get(1);
                 blackPeak = (p1.main < p0.main) ? p1 : p0;
@@ -820,7 +833,7 @@ public class ScaleBuilder
                 blackPeak = blackPeaks.get(0);
             }
 
-            logger.debug("blackPeak: {} beamKey: {}", blackPeak, beamKey);
+            logger.debug("blackPeak: {}, significant beamKey: {}", blackPeak, beamKey);
         }
 
         //------------//
@@ -846,14 +859,16 @@ public class ScaleBuilder
             final Scale scale = sheet.getScale();
 
             try {
-                // Black values (staff line, beam thickness)
+                // Black values (staff line, significant beam)
                 final String title = sheet.getId() + " " + blackFinder.name;
                 final String xLabel = "Runs lengths - " + ((scale != null) ? scale.toString(
                         Info.BLACK) : "NO_SCALE");
                 final String yLabel = "Runs counts - total:" + blackFunction.getArea()
                         + " - Beam quorum:" + getBeamQuorum();
                 final ChartPlotter plotter = new ChartPlotter(title, xLabel, yLabel);
-                blackFinder.plot(plotter, true, 0, maxBlack).display(new Point(20, 20));
+                // Limit x to interline (much smaller than current maxBlack)
+                blackFinder.plot(plotter, true, "Black", 0, comboPeak.main) //
+                        .display(new Point(20, 20));
             } catch (Throwable ex) {
                 logger.warn("Error in plotting black", ex);
             }
@@ -866,7 +881,7 @@ public class ScaleBuilder
                 final String yLabel = "Runs counts";
                 final ChartPlotter plotter = new ChartPlotter(title, xLabel, yLabel);
                 comboMax = Math.min((comboMax * 3) / 2, sheet.getWidth() - 1); // Add some margin
-                comboFinder.plot(plotter, true, 0, comboMax).display(new Point(80, 80));
+                comboFinder.plot(plotter, true, "Combo", 0, comboMax).display(new Point(80, 80));
             } catch (Throwable ex) {
                 logger.warn("Error in plotting combo", ex);
             }

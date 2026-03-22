@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -65,10 +65,13 @@ public enum ProcessingSwitch
     lyrics(ProcessingSwitches.constants.lyrics),
     lyricsAboveStaff(ProcessingSwitches.constants.lyricsAboveStaff),
     articulations(ProcessingSwitches.constants.articulations),
+    dynamicsAboveStaff(ProcessingSwitches.constants.dynamicsAboveStaff),
+    dynamicsBelowStaff(ProcessingSwitches.constants.dynamicsBelowStaff),
 
     keepGrayImages(ProcessingSwitches.constants.keepGrayImages),
     indentations(ProcessingSwitches.constants.indentations),
     bothSharedHeadDots(ProcessingSwitches.constants.bothSharedHeadDots),
+    disconnectedBracedParts(ProcessingSwitches.constants.disconnectedBracedParts),
     implicitTuplets(ProcessingSwitches.constants.implicitTuplets),
 
     // Obsolete switches:
