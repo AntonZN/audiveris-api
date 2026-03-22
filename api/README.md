@@ -269,11 +269,13 @@ Health check (не требует авторизации).
 | Переменная | По умолчанию | Описание |
 |------------|--------------|----------|
 | `API_TOKEN` | `123` | Токен для авторизации |
+| `DEBUG` | `false` | В debug-режиме выводит полный stdout/stderr Audiveris в логи контейнера |
 | `AUDIVERIS_CMD` | `audiveris` | Путь к исполняемому файлу |
 | `INPUT_DIR` | `storage/in` | Директория для входных файлов |
 | `OUTPUT_DIR` | `storage/out` | Директория для результатов |
 | `REDIS_URL` | `redis://redis:6379/0` | URL подключения к Redis |
 | `TASK_WORKERS` | `1` | Количество воркеров |
+| `PROCESSING_TIMEOUT_PER_FILE_SECONDS` | `60` | Таймаут обработки: single = 60 сек, playlist = N * 60 сек |
 
 ### Валидация
 

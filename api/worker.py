@@ -1,5 +1,6 @@
 import shutil
 import threading
+import traceback
 from pathlib import Path
 
 from api.models import TaskStatus
@@ -27,7 +28,22 @@ class Worker:
         while self._running:
             task_id = repo.dequeue(timeout=1)
             if task_id:
-                self._process_task(task_id)
+                try:
+                    self._process_task(task_id)
+                except Exception:
+                    task = repo.get(task_id)
+                    if task:
+                        task["status"] = TaskStatus.error.value
+                        task["errors"] = traceback.format_exc()
+                        progress = task.get("progress") or {}
+                        total = progress.get("total", 1)
+                        completed = progress.get("completed", 0)
+                        task["progress"] = {
+                            "total": total,
+                            "completed": completed,
+                            "failed": max(1, progress.get("failed", 0)),
+                        }
+                        repo.save(task)
 
     def _process_task(self, task_id: str) -> None:
         """Process a single task from the queue."""

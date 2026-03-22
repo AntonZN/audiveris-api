@@ -2,6 +2,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    debug: bool = False
     audiveris_cmd: str = "audiveris"
     audiveris_args: str = "-batch -transcribe -export"
     input_dir: str = "/storage/in"
@@ -21,6 +22,7 @@ class Settings(BaseSettings):
     task_ttl_seconds: int = 86400
     cleanup_interval_seconds: int = 3600
     max_pdf_pages: int = 5
+    processing_timeout_per_file_seconds: int = 60
     # Image preprocessing
     image_min_dimension: int = 1800  # Minimum width/height to skip upscale
     image_upscale_factor: float = 2.0  # Upscale multiplier

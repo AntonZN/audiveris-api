@@ -1,5 +1,9 @@
+import logging
+import os
 import re
+import signal
 import subprocess
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -10,8 +14,91 @@ from api.exceptions import LowInterlineError, ProcessingError
 from api.models import FileResult
 from api.presets import Preset, get_preset_args
 
+logger = logging.getLogger(__name__)
+
 
 class AudiverisService:
+    def _log_command_result(
+        self,
+        cmd: list[str],
+        output_dir: Path,
+        result: subprocess.CompletedProcess,
+        timeout_seconds: int,
+    ) -> None:
+        if not settings.debug:
+            if result.returncode != 0:
+                logger.warning(
+                    "Audiveris failed cmd=%s returncode=%s timeout=%ss output_dir=%s",
+                    " ".join(cmd),
+                    result.returncode,
+                    timeout_seconds,
+                    output_dir,
+                )
+            return
+
+        logger.info(
+            "Audiveris finished cmd=%s returncode=%s timeout=%ss output_dir=%s\nstdout:\n%s\nstderr:\n%s",
+            " ".join(cmd),
+            result.returncode,
+            timeout_seconds,
+            output_dir,
+            result.stdout or "",
+            result.stderr or "",
+        )
+
+    def _timeout_for_single(self) -> int:
+        return max(settings.processing_timeout_per_file_seconds, 1)
+
+    def _timeout_for_playlist(self, input_paths: list[Path]) -> int:
+        return max(len(input_paths), 1) * self._timeout_for_single()
+
+    def _remaining_timeout(self, started_at: float, total_timeout: int) -> int:
+        elapsed = time.monotonic() - started_at
+        return max(int(total_timeout - elapsed), 1)
+
+    def _run_command(
+        self,
+        cmd: list[str],
+        output_dir: Path,
+        timeout_seconds: int,
+    ) -> subprocess.CompletedProcess:
+        process: subprocess.Popen | None = None
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+            stdout, stderr = process.communicate(timeout=timeout_seconds)
+            return subprocess.CompletedProcess(
+                cmd,
+                returncode=process.returncode,
+                stdout=stdout,
+                stderr=stderr,
+            )
+        except subprocess.TimeoutExpired as exc:
+            if process is not None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                stdout, stderr = process.communicate()
+            else:
+                stdout = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout or "")
+                stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or "")
+            result = subprocess.CompletedProcess(
+                cmd,
+                returncode=-1,
+                stdout=stdout,
+                stderr=stderr,
+            )
+            self._log_command_result(cmd, output_dir, result, timeout_seconds)
+            log_path = self._write_log(output_dir, cmd, result)
+            detail = f"Audiveris timed out after {timeout_seconds} seconds"
+            raise ProcessingError(detail, log_path=log_path) from exc
+
     def _convert_webp_to_jpg(self, input_path: Path) -> Path:
         """Convert WebP image to JPG (Audiveris doesn't support WebP)."""
         if input_path.suffix.lower() != ".webp":
@@ -142,13 +229,18 @@ class AudiverisService:
             "-output", str(output_dir),
             str(input_path),
         ]
-        return self._execute_and_process(cmd, output_dir)
+        return self._execute_and_process(
+            cmd,
+            output_dir,
+            timeout_seconds=self._timeout_for_single(),
+        )
 
     def _execute_and_process(
-            self, cmd: list[str], output_dir: Path
+            self, cmd: list[str], output_dir: Path, timeout_seconds: int
     ) -> tuple[Path, Path, int | None]:
         """Execute audiveris command and process results."""
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self._run_command(cmd, output_dir, timeout_seconds)
+        self._log_command_result(cmd, output_dir, result, timeout_seconds)
         log_path = self._write_log(output_dir, cmd, result)
         book_log = self._find_audiveris_log(output_dir, log_path)
         interline_value = self._detect_interline(book_log)
@@ -198,6 +290,8 @@ class AudiverisService:
         Step 2: Transcribe and export the compound book
         """
         all_logs: list[str] = []
+        total_timeout = self._timeout_for_playlist(input_paths)
+        started_at = time.monotonic()
 
         # Build preset args
         preset_enum = Preset(preset) if preset else Preset.default
@@ -216,7 +310,11 @@ class AudiverisService:
             "-playlist", str(playlist_path),
             "-output", str(output_dir),
         ]
-        result_build = subprocess.run(cmd_build, capture_output=True, text=True)
+        result_build = self._run_command(
+            cmd_build,
+            output_dir,
+            self._remaining_timeout(started_at, total_timeout),
+        )
         all_logs.append(f"=== Step 1: Build compound book ===")
         all_logs.append(f"cmd: {' '.join(cmd_build)}")
         all_logs.append(result_build.stdout or "")
@@ -251,7 +349,11 @@ class AudiverisService:
         log_path = output_dir / "audiveris.log"
         log_path.write_text("\n".join(all_logs))
 
-        return self._execute_and_process(cmd_export, output_dir)
+        return self._execute_and_process(
+            cmd_export,
+            output_dir,
+            timeout_seconds=self._remaining_timeout(started_at, total_timeout),
+        )
 
     def _write_log(
             self, out_dir: Path, cmd: list[str], result: subprocess.CompletedProcess

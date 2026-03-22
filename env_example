@@ -1,9 +1,11 @@
+DEBUG=false
 INPUT_DIR=/storage/in
 OUTPUT_DIR=/storage/out
 MIN_INTERLINE=11
 TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata
 JAVA_OPTS=-Xms512m -Xmx4g
 TASK_WORKERS=1
+PROCESSING_TIMEOUT_PER_FILE_SECONDS=60
 REDIS_URL=redis://redis:6379/0
 MEDIA_ROOT=/storage/out
 MEDIA_BASE_URL=http://localhost
