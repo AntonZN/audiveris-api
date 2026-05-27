@@ -24,8 +24,12 @@ class Settings(BaseSettings):
     max_pdf_pages: int = 5
     processing_timeout_per_file_seconds: int = 60
     # Image preprocessing
-    image_min_dimension: int = 1800  # Minimum width/height to skip upscale
-    image_upscale_factor: float = 2.0  # Upscale multiplier
+    # Upscale only genuinely tiny scans. Normal sheet-music scans (~1000-1800px)
+    # transcribe fine at native resolution; upscaling them blurs small tempo/metronome
+    # digits and breaks OCR of the BPM (e.g. "95" -> "9s" -> tempo=9), so we keep a low
+    # threshold to leave such images untouched.
+    image_min_dimension: int = 1000  # Minimum width/height to skip upscale
+    image_upscale_factor: float = 2.0  # Upscale multiplier (only for images below the threshold)
     image_contrast_factor: float = 1.2  # Contrast enhancement
     image_sharpness_factor: float = 1.5  # Sharpness enhancement
 
