@@ -192,6 +192,18 @@ class AudiverisService:
             except Exception:
                 logger.exception("music21 post-processing failed for %s", output_path)
 
+        # После фикса убеждаемся, что починенный файл реально собирается в MIDI
+        # через verovio (renderToMIDI — тот же вызов, что в приложении). Если падает,
+        # отдавать такой файл бессмысленно — возвращаем ошибку.
+        if fixed:
+            from api.verovio_check import midi_ok
+
+            if not midi_ok(target):
+                raise ProcessingError(
+                    "Не удалось получить валидный MusicXML: verovio renderToMIDI падает после фикса",
+                    log_path=log_path,
+                )
+
         return FileResult(
             filename=target.name,
             url=self._build_media_url(target),

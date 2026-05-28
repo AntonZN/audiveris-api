@@ -1,9 +1,11 @@
 """Опциональная пост-обработка MusicXML-выхода Audiveris через music21.
 
 Две независимые возможности, включаются флагами в запросе:
-  * needFix  — починить файл (Audiveris иногда отдаёт невалидный MusicXML, напр.
-               <beam> на ноте-члене аккорда — на таком verovio падает с segfault при
-               сборке MIDI). Чиним прогоном через music21, который пересобирает модель.
+  * needFix  — починить файл. Audiveris регулярно отдаёт невалидный MusicXML (напр.
+               <beam> на ноте-члене аккорда или несбалансированные <slur>), на котором
+               verovio в мобильных сборках падает при renderToMIDI. Чиним БЕЗУСЛОВНО
+               прогоном через music21, который пересобирает модель и выкидывает дефекты
+               (детект не используем — он не покрывал все падающие случаи).
   * analyze  — собрать метаданные партитуры (тональность, размер, темп, инструменты…)
                и вернуть их дополнительным полем.
 
@@ -15,45 +17,9 @@ music21 импортируется лениво внутри функций — 
 from __future__ import annotations
 
 import logging
-import re
-import zipfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-
-# Нота-член аккорда (<chord/>), на которой висит <beam>. Именно это Audiveris
-# иногда генерит, и именно на этом verovio падает при рендере в MIDI.
-_NOTE_RE = re.compile(r"<note\b.*?</note>", re.S)
-
-
-def _read_musicxml_text(path: Path) -> str:
-    """Прочитать XML-текст партитуры. Понимает и .musicxml, и сжатый .mxl (zip)."""
-    try:
-        if path.suffix.lower() == ".mxl":
-            with zipfile.ZipFile(path) as archive:
-                names = [
-                    n for n in archive.namelist()
-                    if n.lower().endswith(".xml") and not n.startswith("META-INF")
-                ]
-                if not names:
-                    return ""
-                return archive.read(names[0]).decode("utf-8", errors="ignore")
-        return path.read_text(errors="ignore")
-    except Exception:
-        logger.exception("Failed to read MusicXML text from %s", path)
-        return ""
-
-
-def _count_beam_on_chord(text: str) -> int:
-    """Сколько нот несут одновременно <chord/> и <beam> — паттерн краша verovio."""
-    return sum(1 for note in _NOTE_RE.findall(text) if "<chord/>" in note and "<beam" in note)
-
-
-def needs_fix(path: Path) -> bool:
-    """Эвристика «надо ли чинить»: есть ли в файле структуры, которые ломают
-    нижестоящие инструменты (verovio → MIDI). Дёшево: чистый текстовый скан,
-    music21 не нужен."""
-    return _count_beam_on_chord(_read_musicxml_text(path)) > 0
 
 
 def _analyze_score(score) -> dict:
@@ -133,15 +99,14 @@ def postprocess(
     """Применить опциональную music21-пост-обработку к выходному файлу.
 
     Возвращает (итоговый_путь, был_ли_починен, метаданные_или_None).
-    Файл парсится не больше одного раза; при need_fix чиним только если детект
-    нашёл проблему. Любой сбой music21 → возврат исходного пути без падения.
+    Файл парсится не больше одного раза; при need_fix чиним всегда (безусловный
+    music21-round-trip). Любой сбой music21 → возврат исходного пути без падения.
     """
     target = path
     fixed = False
     analysis: dict | None = None
 
-    do_fix = need_fix and needs_fix(path)
-    if not (analyze or do_fix):
+    if not (analyze or need_fix):
         return target, fixed, analysis
 
     from music21 import converter
@@ -152,7 +117,7 @@ def postprocess(
         logger.exception("music21 failed to parse %s; skipping post-processing", path)
         return target, fixed, analysis
 
-    if do_fix:
+    if need_fix:
         try:
             fixed_path = path.with_name(f"{path.stem}_fixed.musicxml")
             score.write("musicxml", fp=str(fixed_path))
