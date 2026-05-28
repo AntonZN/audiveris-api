@@ -274,14 +274,16 @@ verovio падает при сборке MIDI.
 
 ## Поведение
 
-| `fix` | Файл собирается | Не собирается |
-|-------|-----------------|---------------|
-| `false` | `200` `{valid: true}` (без файла) | `400` |
-| `true`  | `200` `{valid: true, fixed: false, url}` | чиним через music21 и пробуем снова: если ок — `200` `{valid: true, fixed: true, url}`, иначе `400` |
+Всегда `200`. `valid` — был ли валиден ИСХОДНЫЙ файл; `fixed` — починили ли мы его;
+`url` — ссылка на рабочий файл (исходный или починенный).
+
+| `fix` | Исходный собирается | Не собирается |
+|-------|---------------------|---------------|
+| `false` | `{valid: true, fixed: false, url: null}` | `{valid: false, fixed: false, url: null}` |
+| `true`  | `{valid: true, fixed: false, url}` | чиним через music21 и пробуем снова: если ок — `{valid: false, fixed: true, url}`, иначе `{valid: false, fixed: false, url: null}` |
 """,
     responses={
-        200: {"description": "Файл собирается в MIDI (после фикса, если был)"},
-        400: {"description": "Файл не собирается в MIDI (и не починился, если fix=true)"},
+        200: {"description": "Результат проверки; годность — в поле valid"},
     },
 )
 def validate_musicxml(
@@ -313,20 +315,19 @@ def validate_musicxml(
     # Не собирается.
     if not fix:
         shutil.rmtree(work_dir, ignore_errors=True)
-        raise HTTPException(status_code=400, detail="MusicXML не собирается в MIDI (verovio)")
+        return ValidateResponse(valid=False)
 
-    # fix=true: чиним и пробуем снова.
+    # fix=true: чиним и пробуем снова. valid отражает исходный файл (он был
+    # невалиден), fixed=true — что мы его починили и отдаём рабочую версию.
     fixed_path = repair(input_path, work_dir)
     if fixed_path is not None and midi_ok(fixed_path):
         input_path.unlink(missing_ok=True)
         return ValidateResponse(
-            valid=True, fixed=True, url=audiveris_service._build_media_url(fixed_path)
+            valid=False, fixed=True, url=audiveris_service._build_media_url(fixed_path)
         )
 
     shutil.rmtree(work_dir, ignore_errors=True)
-    raise HTTPException(
-        status_code=400, detail="MusicXML не собирается в MIDI даже после фикса"
-    )
+    return ValidateResponse(valid=False)
 
 
 @router.get(
