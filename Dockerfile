@@ -21,7 +21,7 @@ RUN apt-get update \
         fontconfig \
         libfreetype6 \
         python3 \
-        python3-pip \
+        python3-venv \
         tesseract-ocr \
         tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
@@ -41,8 +41,12 @@ ENV OUTPUT_DIR=/data/out
 ENV KEEP_ARTIFACTS=1
 ENV PYTHONUNBUFFERED=1
 
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv "$VIRTUAL_ENV"
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
 COPY api/requirements.txt /tmp/requirements.txt
-RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY api /srv/api
 
