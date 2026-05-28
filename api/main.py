@@ -21,7 +21,7 @@ async def lifespan(app: FastAPI):
     # Startup: requeue running tasks and start workers
     repo.requeue_running_tasks()
     workers = create_workers(settings.task_workers)
-    if settings.task_ttl_seconds > 0:
+    if settings.task_ttl_seconds > 0 or settings.validate_ttl_seconds > 0:
         cleanup_stop_event.clear()
         cleanup_thread = start_cleanup_loop(cleanup_stop_event)
     yield

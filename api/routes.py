@@ -1,3 +1,4 @@
+import shutil
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -6,16 +7,18 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, Depends
 from pypdf import PdfReader
 
-from api.config import settings
+from api.config import VALIDATE_DIR_PREFIX, settings
 from api.deps import get_api_key
 from api.models import (
     HealthResponse,
     TaskCreateResponse,
     TaskResponse,
     TaskStatus,
+    ValidateResponse,
 )
 from api.presets import Preset
 from api.repository import repo
+from api.services import audiveris_service
 
 router = APIRouter(tags=["API"], dependencies=[Depends(get_api_key)])
 
@@ -88,6 +91,7 @@ def _build_task(
     preset: str = "default",
     analyze: bool = False,
     need_fix: bool = False,
+    enhance: bool = False,
 ) -> dict:
     """Создать словарь задачи."""
     return {
@@ -99,6 +103,7 @@ def _build_task(
         "preset": preset,
         "analyze": analyze,
         "need_fix": need_fix,
+        "enhance": enhance,
         "input_files": input_files,
         "input_dir": str(input_dir),
         "output_dir": str(output_dir),
@@ -142,6 +147,7 @@ async def create_single_task(
     preset: Preset = Form(Preset.default, description="Пресет обработки"),
     analyze: bool = Form(False, description="Вернуть метаданные партитуры (тональность, размер, темп, инструменты…) в поле analysis"),
     need_fix: bool = Form(True, description="Починить невалидный MusicXML через music21 (если детект найдёт проблему)"),
+    enhance: bool = Form(False, description="Агрессивная обработка фото/скриншотов (автокроп + апскейл + адаптивная бинаризация) для распознавания мелких/низкокачественных нот"),
 ) -> TaskCreateResponse:
     """Создать задачу OMR для одного файла."""
     task_id = uuid.uuid4().hex
@@ -182,6 +188,7 @@ async def create_single_task(
         preset=preset.value,
         analyze=analyze,
         need_fix=need_fix,
+        enhance=enhance,
     )
     repo.save(task)
     repo.enqueue(task_id)
@@ -224,6 +231,7 @@ async def create_batch_task(
     preset: Preset = Form(Preset.default, description="Пресет обработки"),
     analyze: bool = Form(False, description="Вернуть метаданные партитуры (тональность, размер, темп, инструменты…) в поле analysis"),
     need_fix: bool = Form(True, description="Починить невалидный MusicXML через music21 (если детект найдёт проблему)"),
+    enhance: bool = Form(False, description="Агрессивная обработка фото/скриншотов (автокроп + апскейл + адаптивная бинаризация) для распознавания мелких/низкокачественных нот"),
 ) -> TaskCreateResponse:
     """Создать задачу OMR для нескольких файлов (плейлист)."""
     if not files:
@@ -247,11 +255,78 @@ async def create_batch_task(
         preset=preset.value,
         analyze=analyze,
         need_fix=need_fix,
+        enhance=enhance,
     )
     repo.save(task)
     repo.enqueue(task_id)
 
     return TaskCreateResponse(task_id=task_id, status=TaskStatus.queued)
+
+
+@router.post(
+    "/validate",
+    response_model=ValidateResponse,
+    summary="Проверить MusicXML (сборка в MIDI через verovio)",
+    description="""
+Проверяет, собирается ли загруженный MusicXML (.musicxml/.xml/.mxl) в MIDI через verovio.
+Это синхронная проверка «ок / не ок» — Audiveris иногда отдаёт MusicXML, на котором
+verovio падает при сборке MIDI.
+
+## Поведение
+
+| `fix` | Файл собирается | Не собирается |
+|-------|-----------------|---------------|
+| `false` | `200` `{valid: true}` (без файла) | `400` |
+| `true`  | `200` `{valid: true, fixed: false, url}` | чиним через music21 и пробуем снова: если ок — `200` `{valid: true, fixed: true, url}`, иначе `400` |
+""",
+    responses={
+        200: {"description": "Файл собирается в MIDI (после фикса, если был)"},
+        400: {"description": "Файл не собирается в MIDI (и не починился, если fix=true)"},
+    },
+)
+def validate_musicxml(
+    file: UploadFile = File(..., description="Файл MusicXML (.musicxml, .xml или .mxl)"),
+    fix: bool = Form(False, description="Чинить файл через music21, если verovio не собирает MIDI"),
+) -> ValidateResponse:
+    """Проверить (и опционально починить) MusicXML по сборке в MIDI через verovio."""
+    from api.analysis import repair
+    from api.verovio_check import midi_ok
+
+    work_id = uuid.uuid4().hex
+    work_dir = Path(settings.output_dir) / f"{VALIDATE_DIR_PREFIX}{work_id}"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    input_name = _safe_name(file.filename, "input.musicxml")
+    input_path = work_dir / input_name
+    with input_path.open("wb") as handle:
+        shutil.copyfileobj(file.file, handle)
+
+    # Исходный файл уже собирается?
+    if midi_ok(input_path):
+        if not fix:
+            shutil.rmtree(work_dir, ignore_errors=True)
+            return ValidateResponse(valid=True)
+        return ValidateResponse(
+            valid=True, fixed=False, url=audiveris_service._build_media_url(input_path)
+        )
+
+    # Не собирается.
+    if not fix:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail="MusicXML не собирается в MIDI (verovio)")
+
+    # fix=true: чиним и пробуем снова.
+    fixed_path = repair(input_path, work_dir)
+    if fixed_path is not None and midi_ok(fixed_path):
+        input_path.unlink(missing_ok=True)
+        return ValidateResponse(
+            valid=True, fixed=True, url=audiveris_service._build_media_url(fixed_path)
+        )
+
+    shutil.rmtree(work_dir, ignore_errors=True)
+    raise HTTPException(
+        status_code=400, detail="MusicXML не собирается в MIDI даже после фикса"
+    )
 
 
 @router.get(

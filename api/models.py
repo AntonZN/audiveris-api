@@ -55,6 +55,14 @@ class FileResult(ApiModel):
     analysis: ScoreAnalysis | None = Field(default=None, description="Метаданные партитуры (при analyze=true)")
 
 
+class ValidateResponse(ApiModel):
+    """Результат проверки «собирается ли MusicXML в MIDI через verovio»."""
+
+    valid: bool = Field(description="Собрался ли файл в MIDI (после фикса, если был)")
+    fixed: bool = Field(default=False, description="Был ли файл починен music21 (только при fix=true)")
+    url: str | None = Field(default=None, description="Ссылка на рабочий файл (только при fix=true)")
+
+
 class TaskCreateResponse(ApiModel):
     """Ответ после создания задачи."""
 

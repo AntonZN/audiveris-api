@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     requeue_running: bool = True
     api_token: str = '123'
     task_ttl_seconds: int = 86400
+    # Файлы из /validate эфемерны (клиент забирает ссылку сразу), поэтому у них
+    # свой, более короткий TTL, чем у выходов задач.
+    validate_ttl_seconds: int = 3600
     cleanup_interval_seconds: int = 3600
     max_pdf_pages: int = 5
     processing_timeout_per_file_seconds: int = 60
@@ -39,3 +42,7 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Префикс рабочих директорий /validate внутри output_dir. По нему cleanup отличает
+# эфемерные validate-выходы (свой короткий TTL) от выходов задач.
+VALIDATE_DIR_PREFIX = "validate-"

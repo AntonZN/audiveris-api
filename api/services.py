@@ -158,6 +158,18 @@ class AudiverisService:
 
         return input_path
 
+    def _prepare_input(self, input_path: Path, enhance: bool) -> Path:
+        """Prepare an input image for Audiveris.
+
+        With ``enhance`` on, run the aggressive phone/screenshot recipe (autocrop +
+        upscale + adaptive threshold); otherwise the standard light preprocessing.
+        """
+        if enhance:
+            from api.image_prep import enhance_for_omr
+
+            return enhance_for_omr(self._convert_webp_to_jpg(input_path))
+        return self._preprocess_image(input_path)
+
     def _build_success_result(
         self,
         output_path: Path,
@@ -195,11 +207,12 @@ class AudiverisService:
         preset: str = "default",
         analyze: bool = False,
         need_fix: bool = False,
+        enhance: bool = False,
     ) -> FileResult:
         """Process a single input file and return a FileResult."""
         try:
             output_path, log_path, interline = self._run_audiveris(
-                input_path, output_dir, preset
+                input_path, output_dir, preset, enhance
             )
             return self._build_success_result(output_path, log_path, analyze, need_fix)
         except LowInterlineError as exc:
@@ -222,11 +235,12 @@ class AudiverisService:
         preset: str = "default",
         analyze: bool = False,
         need_fix: bool = False,
+        enhance: bool = False,
     ) -> FileResult:
         """Process multiple files as a playlist (single book) and return a FileResult."""
         try:
             output_path, log_path, interline = self._run_audiveris_playlist(
-                input_paths, output_dir, preset
+                input_paths, output_dir, preset, enhance
             )
             return self._build_success_result(output_path, log_path, analyze, need_fix)
         except LowInterlineError as exc:
@@ -243,10 +257,11 @@ class AudiverisService:
             )
 
     def _run_audiveris(
-            self, input_path: Path, output_dir: Path, preset: str = "default"
+            self, input_path: Path, output_dir: Path, preset: str = "default",
+            enhance: bool = False,
     ) -> tuple[Path, Path, int | None]:
         """Run audiveris on a single input file."""
-        input_path = self._preprocess_image(input_path)
+        input_path = self._prepare_input(input_path, enhance)
 
         # Build command with preset
         preset_enum = Preset(preset) if preset else Preset.default
@@ -314,7 +329,8 @@ class AudiverisService:
         return playlist_path
 
     def _run_audiveris_playlist(
-            self, input_paths: list[Path], output_dir: Path, preset: str = "default"
+            self, input_paths: list[Path], output_dir: Path, preset: str = "default",
+            enhance: bool = False,
     ) -> tuple[Path, Path, int | None]:
         """Run audiveris with playlist.
 
@@ -330,7 +346,7 @@ class AudiverisService:
         preset_args = get_preset_args(preset_enum)
 
         # Preprocess all input images (may convert WebP to JPG)
-        processed_paths = [self._preprocess_image(p) for p in input_paths]
+        processed_paths = [self._prepare_input(p, enhance) for p in input_paths]
 
         # Step 1: Create compound book from playlist
         playlist_path = self._create_playlist_xml(processed_paths, output_dir)

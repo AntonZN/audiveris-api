@@ -102,6 +102,31 @@ def _analyze_score(score) -> dict:
     }
 
 
+def repair(path: Path, out_dir: Path | None = None) -> Path | None:
+    """Пересобрать MusicXML прогоном через music21 (parse -> write).
+
+    Это убирает невалидные структуры (напр. <beam> на ноте-члене аккорда), на
+    которых verovio падает при сборке MIDI. Возвращает путь к починенному
+    .musicxml или None, если music21 не смог разобрать/записать файл.
+    """
+    from music21 import converter
+
+    try:
+        score = converter.parse(str(path))
+    except Exception:
+        logger.exception("music21 failed to parse %s; cannot repair", path)
+        return None
+
+    target_dir = out_dir if out_dir is not None else path.parent
+    fixed_path = target_dir / f"{path.stem}_fixed.musicxml"
+    try:
+        score.write("musicxml", fp=str(fixed_path))
+    except Exception:
+        logger.exception("music21 failed to write fixed file for %s", path)
+        return None
+    return fixed_path
+
+
 def postprocess(
     path: Path, analyze: bool = False, need_fix: bool = False
 ) -> tuple[Path, bool, dict | None]:
