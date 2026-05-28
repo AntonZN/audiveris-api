@@ -30,6 +30,19 @@ class TaskProgress(ApiModel):
     failed: int = Field(description="Завершено с ошибкой")
 
 
+class ScoreAnalysis(ApiModel):
+    """Метаданные партитуры, извлечённые music21 (поле приходит при analyze=true)."""
+
+    key: str | None = Field(default=None, description="Определённая тональность")
+    key_confidence: float | None = Field(default=None, description="Уверенность определения тональности (0..1)")
+    time_signatures: list[str] = Field(default_factory=list, description="Размеры (напр. '4/4')")
+    tempos: list[float] = Field(default_factory=list, description="Найденные темпы (BPM)")
+    parts: int = Field(default=0, description="Количество партий")
+    instruments: list[str] = Field(default_factory=list, description="Инструменты партий")
+    measures: int = Field(default=0, description="Количество тактов")
+    notes: int = Field(default=0, description="Количество нот")
+
+
 class FileResult(ApiModel):
 
     """Результат обработки одного файла."""
@@ -38,6 +51,8 @@ class FileResult(ApiModel):
     url: str | None = Field(default=None, description="Ссылка для скачивания")
     error: str | None = Field(default=None, description="Сообщение об ошибке")
     log_url: str | None = Field(default=None, description="Ссылка на лог Audiveris")
+    fixed: bool = Field(default=False, description="Был ли файл починен music21 (при needFix=true)")
+    analysis: ScoreAnalysis | None = Field(default=None, description="Метаданные партитуры (при analyze=true)")
 
 
 class TaskCreateResponse(ApiModel):

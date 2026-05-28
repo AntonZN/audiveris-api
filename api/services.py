@@ -158,19 +158,50 @@ class AudiverisService:
 
         return input_path
 
+    def _build_success_result(
+        self,
+        output_path: Path,
+        log_path: Path | None,
+        analyze: bool,
+        need_fix: bool,
+    ) -> FileResult:
+        """Build a FileResult from a produced output file, applying optional
+        music21 post-processing (fix / analyze) when requested."""
+        target = output_path
+        fixed = False
+        analysis = None
+        if analyze or need_fix:
+            from api.analysis import postprocess
+
+            try:
+                target, fixed, analysis = postprocess(
+                    output_path, analyze=analyze, need_fix=need_fix
+                )
+            except Exception:
+                logger.exception("music21 post-processing failed for %s", output_path)
+
+        return FileResult(
+            filename=target.name,
+            url=self._build_media_url(target),
+            log_url=self._build_media_url(log_path) if log_path else None,
+            fixed=fixed,
+            analysis=analysis,
+        )
+
     def process_single(
-        self, input_path: Path, output_dir: Path, preset: str = "default"
+        self,
+        input_path: Path,
+        output_dir: Path,
+        preset: str = "default",
+        analyze: bool = False,
+        need_fix: bool = False,
     ) -> FileResult:
         """Process a single input file and return a FileResult."""
         try:
             output_path, log_path, interline = self._run_audiveris(
                 input_path, output_dir, preset
             )
-            return FileResult(
-                filename=output_path.name,
-                url=self._build_media_url(output_path),
-                log_url=self._build_media_url(log_path) if log_path else None,
-            )
+            return self._build_success_result(output_path, log_path, analyze, need_fix)
         except LowInterlineError as exc:
             return FileResult(
                 filename=input_path.name,
@@ -185,18 +216,19 @@ class AudiverisService:
             )
 
     def process_playlist(
-        self, input_paths: list[Path], output_dir: Path, preset: str = "default"
+        self,
+        input_paths: list[Path],
+        output_dir: Path,
+        preset: str = "default",
+        analyze: bool = False,
+        need_fix: bool = False,
     ) -> FileResult:
         """Process multiple files as a playlist (single book) and return a FileResult."""
         try:
             output_path, log_path, interline = self._run_audiveris_playlist(
                 input_paths, output_dir, preset
             )
-            return FileResult(
-                filename=output_path.name,
-                url=self._build_media_url(output_path),
-                log_url=self._build_media_url(log_path) if log_path else None,
-            )
+            return self._build_success_result(output_path, log_path, analyze, need_fix)
         except LowInterlineError as exc:
             return FileResult(
                 filename="playlist",
