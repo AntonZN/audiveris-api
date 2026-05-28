@@ -14,7 +14,7 @@ COPY --exclude=api . .
 
 RUN ./gradlew :app:distTar --no-daemon
 
-FROM eclipse-temurin:25-jdk-jammy
+FROM eclipse-temurin:25-jdk-noble
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -35,7 +35,7 @@ RUN mkdir -p /opt \
     && ln -s /opt/audiveris/bin/Audiveris /usr/local/bin/audiveris \
     && rm /tmp/audiveris.tar
 
-ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/4.00/tessdata
+ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata
 ENV INPUT_DIR=/data/in
 ENV OUTPUT_DIR=/data/out
 ENV KEEP_ARTIFACTS=1
