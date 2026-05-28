@@ -6,4 +6,4 @@ redis==5.0.8
 pydantic-settings==2.2.1
 pypdf==5.1.0
 pillow==11.1.0
-music21==10.3.0
+music21
