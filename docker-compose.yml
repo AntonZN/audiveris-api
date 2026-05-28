@@ -15,7 +15,7 @@ services:
       INPUT_DIR: ${INPUT_DIR}
       OUTPUT_DIR: ${OUTPUT_DIR}
       MIN_INTERLINE: ${MIN_INTERLINE}
-      TESSDATA_PREFIX: ${TESSDATA_PREFIX:-/usr/share/tesseract-ocr/5/tessdata}
+      TESSDATA_PREFIX: ${TESSDATA_PREFIX:-/opt/tessdata}
       JAVA_OPTS: ${JAVA_OPTS}
       TASK_WORKERS: ${TASK_WORKERS}
       REDIS_URL: ${REDIS_URL}

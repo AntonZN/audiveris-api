@@ -35,7 +35,11 @@ RUN mkdir -p /opt \
     && ln -s /opt/audiveris/bin/Audiveris /usr/local/bin/audiveris \
     && rm /tmp/audiveris.tar
 
-ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata
+# Audiveris initializes Tesseract in legacy mode, which the apt tesseract-ocr-eng
+# package only ships as an LSTM-only model (init fails: "Could not initialize ...
+# eng in legacy mode"). Ship the combined legacy+LSTM eng.traineddata instead.
+COPY --from=builder /src/app/dev/tessdata/eng.traineddata /opt/tessdata/eng.traineddata
+ENV TESSDATA_PREFIX=/opt/tessdata
 ENV INPUT_DIR=/data/in
 ENV OUTPUT_DIR=/data/out
 ENV KEEP_ARTIFACTS=1
