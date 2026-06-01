@@ -22,9 +22,32 @@ music21 импортируется лениво внутри функций — 
 from __future__ import annotations
 
 import logging
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+_XML_DROP_TAGS = frozenset(
+    {
+        "movement-title",
+        "movement-number",
+        "work",
+        "identification",
+        "credit",
+    }
+)
+
+_XML_BLANK_TAGS = frozenset(
+    {
+        "part-name",
+        "part-abbreviation",
+        "part-name-display",
+        "part-abbreviation-display",
+        "instrument-name",
+        "instrument-abbreviation",
+    }
+)
 
 
 def _analyze_score(score) -> dict:
@@ -104,6 +127,62 @@ def _strip_text(score) -> None:
     except Exception:
         logger.exception("strip: failed to clear lyrics")
 
+    # Вычистить метаданные (заголовок, композитор и т.п.), иначе music21 запишет
+    # их обратно в <movement-title>/<identification><creator>.
+    try:
+        from music21 import metadata as m21metadata
+
+        score.metadata = m21metadata.Metadata()
+    except Exception:
+        logger.exception("strip: failed to reset score metadata")
+
+    # Затереть имена партий и инструментов: их рисуют как подписи у нотоносцев.
+    try:
+        for part in getattr(score, "parts", []) or []:
+            part.partName = None
+            part.partAbbreviation = None
+            try:
+                for inst in part.recurse().getElementsByClass("Instrument"):
+                    inst.instrumentName = None
+                    inst.instrumentAbbreviation = None
+            except Exception:
+                logger.exception("strip: failed to clear instrument names")
+    except Exception:
+        logger.exception("strip: failed to clear part names")
+
+
+def _strip_text_xml(path: Path) -> None:
+    """Финальная XML-зачистка после записи music21. Действует in-place.
+
+    Слой нужен потому, что music21 при записи всё равно вставляет:
+      * <identification><creator>Music21</creator><software>…</software></identification>
+        (вместе с <miscellaneous-field name="source-file">…</miscellaneous-field> от
+        Audiveris — утечка внутреннего пути сервера наружу),
+      * <movement-title>...</movement-title> (если был ранее),
+      * <part-name>/<instrument-name>/<part-abbreviation>/<instrument-abbreviation>.
+    Удаляем оптональные блоки целиком, обязательные по схеме (<part-name>) — обнуляем.
+    Сбой — оставляем файл как есть, не падаем.
+    """
+    try:
+        tree = ET.parse(str(path))
+    except Exception:
+        logger.exception("xml strip: failed to parse %s", path)
+        return
+
+    root = tree.getroot()
+    try:
+        for parent in list(root.iter()):
+            for child in list(parent):
+                if child.tag in _XML_DROP_TAGS:
+                    parent.remove(child)
+                elif child.tag in _XML_BLANK_TAGS:
+                    child.text = ""
+                    for sub in list(child):
+                        child.remove(sub)
+        tree.write(str(path), encoding="utf-8", xml_declaration=True)
+    except Exception:
+        logger.exception("xml strip: failed to write %s", path)
+
 
 def repair(path: Path, out_dir: Path | None = None) -> Path | None:
     """Пересобрать MusicXML прогоном через music21 (parse -> strip text -> write).
@@ -129,6 +208,7 @@ def repair(path: Path, out_dir: Path | None = None) -> Path | None:
     except Exception:
         logger.exception("music21 failed to write fixed file for %s", path)
         return None
+    _strip_text_xml(fixed_path)
     return fixed_path
 
 
@@ -161,6 +241,7 @@ def postprocess(
             _strip_text(score)
             fixed_path = path.with_name(f"{path.stem}_fixed.musicxml")
             score.write("musicxml", fp=str(fixed_path))
+            _strip_text_xml(fixed_path)
             target, fixed = fixed_path, True
         except Exception:
             logger.exception("music21 failed to write fixed file for %s", path)
