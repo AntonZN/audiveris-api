@@ -9,6 +9,11 @@
   * analyze  — собрать метаданные партитуры (тональность, размер, темп, инструменты…)
                и вернуть их дополнительным полем.
 
+Перед любой записью music21 ещё и вырезает текстовый шум (слова, слоги, аккордовые
+символы, титулы, рехерсал-метки) — главное оставить темп, остальное всегда убирается
+(см. _strip_text). Это решено архитектурно: распознанный Audiveris текст часто мусор,
+ломает рендер в мобильных приложениях и потребителям не нужен.
+
 music21 импортируется лениво внутри функций — он тяжёлый, и если флаги не заданы,
 платить за импорт не нужно. Любая ошибка пост-обработки не должна ронять задачу:
 функции деградируют к «ничего не сделали» и возвращают исходный файл.
@@ -68,12 +73,45 @@ def _analyze_score(score) -> dict:
     }
 
 
+def _strip_text(score) -> None:
+    """Вырезать текстовый «мусор», оставив музыку и темп. Действует in-place.
+
+    Убираем: <words> (TextExpression), <lyric>, аккордовые символы (C, Am…),
+    титульные тексты (TextBox), рехерсал-метки. Сохраняем: MetronomeMark (BPM),
+    TimeSignature, KeySignature, ноты/аккорды/паузы, лиги/штрихи/орнаменты,
+    динамику — это музыкальная сущность, не текст. Любой сбой music21 для одного
+    типа не валит остальные.
+    """
+    from music21 import expressions, harmony
+
+    def _drop(cls) -> None:
+        try:
+            for elem in list(score.recurse().getElementsByClass(cls)):
+                site = elem.activeSite
+                if site is not None:
+                    site.remove(elem)
+        except Exception:
+            logger.exception("strip: failed to remove %s", cls)
+
+    _drop(expressions.TextExpression)
+    _drop(expressions.RehearsalMark)
+    _drop(harmony.ChordSymbol)
+    _drop("TextBox")
+    try:
+        for n in score.recurse().getElementsByClass("GeneralNote"):
+            if n.lyrics:
+                n.lyrics = []
+    except Exception:
+        logger.exception("strip: failed to clear lyrics")
+
+
 def repair(path: Path, out_dir: Path | None = None) -> Path | None:
-    """Пересобрать MusicXML прогоном через music21 (parse -> write).
+    """Пересобрать MusicXML прогоном через music21 (parse -> strip text -> write).
 
     Это убирает невалидные структуры (напр. <beam> на ноте-члене аккорда), на
-    которых verovio падает при сборке MIDI. Возвращает путь к починенному
-    .musicxml или None, если music21 не смог разобрать/записать файл.
+    которых verovio падает при сборке MIDI, и заодно вырезает текстовый шум
+    (см. _strip_text). Возвращает путь к починенному .musicxml или None,
+    если music21 не смог разобрать/записать файл.
     """
     from music21 import converter
 
@@ -86,6 +124,7 @@ def repair(path: Path, out_dir: Path | None = None) -> Path | None:
     target_dir = out_dir if out_dir is not None else path.parent
     fixed_path = target_dir / f"{path.stem}_fixed.musicxml"
     try:
+        _strip_text(score)
         score.write("musicxml", fp=str(fixed_path))
     except Exception:
         logger.exception("music21 failed to write fixed file for %s", path)
@@ -119,6 +158,7 @@ def postprocess(
 
     if need_fix:
         try:
+            _strip_text(score)
             fixed_path = path.with_name(f"{path.stem}_fixed.musicxml")
             score.write("musicxml", fp=str(fixed_path))
             target, fixed = fixed_path, True
