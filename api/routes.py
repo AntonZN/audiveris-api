@@ -90,7 +90,6 @@ def _build_task(
     playlist: bool,
     preset: str = "default",
     analyze: bool = False,
-    need_fix: bool = False,
     enhance: bool = False,
 ) -> dict:
     """Создать словарь задачи."""
@@ -102,7 +101,6 @@ def _build_task(
         "playlist": playlist,
         "preset": preset,
         "analyze": analyze,
-        "need_fix": need_fix,
         "enhance": enhance,
         "input_files": input_files,
         "input_dir": str(input_dir),
@@ -146,7 +144,6 @@ async def create_single_task(
     file: UploadFile = File(..., description="Файл изображения (PNG, JPG, WebP) или PDF (до 5 страниц)"),
     preset: Preset = Form(Preset.default, description="Пресет обработки"),
     analyze: bool = Form(False, description="Вернуть метаданные партитуры (тональность, размер, темп, инструменты…) в поле analysis"),
-    need_fix: bool = Form(True, description="Починить невалидный MusicXML через music21 (если детект найдёт проблему)"),
     enhance: bool = Form(False, description="Агрессивная обработка фото/скриншотов (автокроп + апскейл + адаптивная бинаризация) для распознавания мелких/низкокачественных нот"),
 ) -> TaskCreateResponse:
     """Создать задачу OMR для одного файла."""
@@ -187,7 +184,6 @@ async def create_single_task(
         playlist=False,
         preset=preset.value,
         analyze=analyze,
-        need_fix=need_fix,
         enhance=enhance,
     )
     repo.save(task)
@@ -230,7 +226,6 @@ async def create_batch_task(
     files: list[UploadFile] = File(..., description="Файлы изображений (PNG, JPG)"),
     preset: Preset = Form(Preset.default, description="Пресет обработки"),
     analyze: bool = Form(False, description="Вернуть метаданные партитуры (тональность, размер, темп, инструменты…) в поле analysis"),
-    need_fix: bool = Form(True, description="Починить невалидный MusicXML через music21 (если детект найдёт проблему)"),
     enhance: bool = Form(False, description="Агрессивная обработка фото/скриншотов (автокроп + апскейл + адаптивная бинаризация) для распознавания мелких/низкокачественных нот"),
 ) -> TaskCreateResponse:
     """Создать задачу OMR для нескольких файлов (плейлист)."""
@@ -254,7 +249,6 @@ async def create_batch_task(
         playlist=True,
         preset=preset.value,
         analyze=analyze,
-        need_fix=need_fix,
         enhance=enhance,
     )
     repo.save(task)

@@ -175,34 +175,52 @@ class AudiverisService:
         output_path: Path,
         log_path: Path | None,
         analyze: bool,
-        need_fix: bool,
     ) -> FileResult:
-        """Build a FileResult from a produced output file, applying optional
-        music21 post-processing (fix / analyze) when requested."""
+        """Build a FileResult from a produced output file.
+
+        Постобработка делается ВСЕГДА (политика «фиксим всегда»):
+          1) `_strip_text_xml` — выкидываем текстовый шум и утечки путей из сырого
+             выхода Audiveris (.mxl/.xml на месте);
+          2) music21-round-trip через `postprocess` — пересобираем модель,
+             пишем `_fixed.musicxml`, опционально считаем analysis;
+          3) `verovio_check.midi_ok` — если после фикса verovio не собирает MIDI,
+             возвращать такой файл бессмысленно, поднимаем ProcessingError.
+        """
+        try:
+            from api.analysis import _strip_text_xml
+
+            _strip_text_xml(output_path)
+        except Exception:
+            logger.exception("xml strip failed for %s", output_path)
+
         target = output_path
         fixed = False
         analysis = None
-        if analyze or need_fix:
-            from api.analysis import postprocess
+        from api.analysis import postprocess
 
-            try:
-                target, fixed, analysis = postprocess(
-                    output_path, analyze=analyze, need_fix=need_fix
-                )
-            except Exception:
-                logger.exception("music21 post-processing failed for %s", output_path)
+        try:
+            target, fixed, analysis = postprocess(output_path, analyze=analyze)
+        except Exception:
+            logger.exception("music21 post-processing failed for %s", output_path)
 
-        # После фикса убеждаемся, что починенный файл реально собирается в MIDI
-        # через verovio (renderToMIDI — тот же вызов, что в приложении). Если падает,
-        # отдавать такой файл бессмысленно — возвращаем ошибку.
-        if fixed:
-            from api.verovio_check import midi_ok
+        # verovio renderToMIDI — это «контракт» с мобильным клиентом: ровно тот же
+        # вызов, что у него внутри. Если файл его не проходит — отдавать смысла нет.
+        # Проверяем и при успешном фиксе, и при «фикс не удался, возвращаем оригинал»:
+        # последний случай не редок (music21 регулярно валится на странных партитурах
+        # своими внутренними KeyError'ами), и тогда исходный .mxl — единственное,
+        # что у нас есть.
+        from api.verovio_check import midi_ok
 
-            if not midi_ok(target):
-                raise ProcessingError(
-                    "Не удалось получить валидный MusicXML: verovio renderToMIDI падает после фикса",
-                    log_path=log_path,
-                )
+        if not midi_ok(target):
+            detail = (
+                "Не удалось получить валидный MusicXML: verovio renderToMIDI падает "
+                "после фикса"
+                if fixed
+                else "Не удалось получить валидный MusicXML: music21 не смог "
+                     "пересобрать файл, а исходный выход Audiveris не рендерится "
+                     "в MIDI через verovio"
+            )
+            raise ProcessingError(detail, log_path=log_path)
 
         return FileResult(
             filename=target.name,
@@ -218,7 +236,6 @@ class AudiverisService:
         output_dir: Path,
         preset: str = "default",
         analyze: bool = False,
-        need_fix: bool = False,
         enhance: bool = False,
     ) -> FileResult:
         """Process a single input file and return a FileResult."""
@@ -226,7 +243,7 @@ class AudiverisService:
             output_path, log_path, interline = self._run_audiveris(
                 input_path, output_dir, preset, enhance
             )
-            return self._build_success_result(output_path, log_path, analyze, need_fix)
+            return self._build_success_result(output_path, log_path, analyze)
         except LowInterlineError as exc:
             return FileResult(
                 filename=input_path.name,
@@ -246,7 +263,6 @@ class AudiverisService:
         output_dir: Path,
         preset: str = "default",
         analyze: bool = False,
-        need_fix: bool = False,
         enhance: bool = False,
     ) -> FileResult:
         """Process multiple files as a playlist (single book) and return a FileResult."""
@@ -254,7 +270,7 @@ class AudiverisService:
             output_path, log_path, interline = self._run_audiveris_playlist(
                 input_paths, output_dir, preset, enhance
             )
-            return self._build_success_result(output_path, log_path, analyze, need_fix)
+            return self._build_success_result(output_path, log_path, analyze)
         except LowInterlineError as exc:
             return FileResult(
                 filename="playlist",

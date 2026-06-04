@@ -51,7 +51,7 @@ class FileResult(ApiModel):
     url: str | None = Field(default=None, description="Ссылка для скачивания")
     error: str | None = Field(default=None, description="Сообщение об ошибке")
     log_url: str | None = Field(default=None, description="Ссылка на лог Audiveris")
-    fixed: bool = Field(default=False, description="Был ли файл починен music21 (при needFix=true)")
+    fixed: bool = Field(default=False, description="Был ли файл прогнан через music21 round-trip (сейчас — всегда true при успехе)")
     analysis: ScoreAnalysis | None = Field(default=None, description="Метаданные партитуры (при analyze=true)")
 
 
