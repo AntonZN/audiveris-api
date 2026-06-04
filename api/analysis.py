@@ -32,14 +32,14 @@ logger = logging.getLogger(__name__)
 
 
 # Теги, которые удаляются целиком (опциональные по схеме MusicXML).
+# Название (movement-title / work / movement-number) НЕ удаляется — мобила
+# использует его как имя песни. Композитор/encoding/path leaks — внутри
+# <identification>, его сносим целиком.
 _XML_DROP_TAGS = frozenset(
     {
-        # шапка/титулы
-        "movement-title",
-        "movement-number",
-        "work",
+        # шапка
         "identification",  # <creator>, <software>, <source>, <miscellaneous> → утечки путей
-        "credit",
+        "credit",  # визуальные подписи на странице (название дублируется в movement-title)
         # текст в теле партитуры
         "words",  # <direction-type><words>…</words></direction-type>
         "lyric",  # подписанные слоги под нотами
@@ -138,12 +138,21 @@ def _strip_text(score) -> None:
     except Exception:
         logger.exception("strip: failed to clear lyrics")
 
-    # Вычистить метаданные (заголовок, композитор и т.п.), иначе music21 запишет
-    # их обратно в <movement-title>/<identification><creator>.
+    # Сбросить метаданные, но сохранить НАЗВАНИЕ (movementName/title) —
+    # мобила использует его как имя песни. Композитор, copyright, encoder и пр.
+    # обычно либо мусор от OCR ("(mo-1827)"), либо авто-стэмп music21 ("Music21")
+    # — выкидываем.
     try:
         from music21 import metadata as m21metadata
 
+        old = score.metadata
+        preserved_movement = getattr(old, "movementName", None) if old is not None else None
+        preserved_title = getattr(old, "title", None) if old is not None else None
         score.metadata = m21metadata.Metadata()
+        if preserved_movement:
+            score.metadata.movementName = preserved_movement
+        if preserved_title:
+            score.metadata.title = preserved_title
     except Exception:
         logger.exception("strip: failed to reset score metadata")
 
