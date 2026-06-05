@@ -30,6 +30,37 @@ class TaskProgress(ApiModel):
     failed: int = Field(description="Завершено с ошибкой")
 
 
+class TextDirection(ApiModel):
+    """Текстовый <words> или <rehearsal> с привязкой к такту."""
+
+    text: str = Field(description="Сам текст (напр. 'Adagio sostenuto', 'sempre pianissimo')")
+    measure: str | None = Field(default=None, description="Номер такта, в котором найден")
+    placement: str | None = Field(default=None, description="Положение: 'above' / 'below' (если указано Audiveris)")
+
+
+class TextLyric(ApiModel):
+    """Слоговой текст под нотой (<lyric><text>)."""
+
+    text: str = Field(description="Слог (или склейка через elision)")
+    measure: str | None = Field(default=None, description="Номер такта")
+
+
+class ScoreTexts(ApiModel):
+    """Все распознанные тексты из MusicXML. Сервер их вычищает из XML
+    (мобильный плеер не умеет корректно их рисовать), но возвращает здесь,
+    чтобы приложение само показало их над/вокруг плеера.
+    """
+
+    title: str | None = Field(default=None, description="Название (<movement-title>/<work-title>)")
+    composer: str | None = Field(default=None, description="Композитор (<creator type='composer'>)")
+    credits: list[str] = Field(default_factory=list, description="Визуальные подписи на странице (<credit-words>)")
+    directions: list[TextDirection] = Field(default_factory=list, description="Текстовые ремарки в теле партитуры (<words>)")
+    rehearsals: list[TextDirection] = Field(default_factory=list, description="Рехерсал-метки A/B/C (<rehearsal>)")
+    lyrics: list[TextLyric] = Field(default_factory=list, description="Слоги под нотами (<lyric>)")
+    part_names: list[str] = Field(default_factory=list, description="Имена партий (<part-name>)")
+    instrument_names: list[str] = Field(default_factory=list, description="Имена инструментов (<instrument-name>)")
+
+
 class ScoreAnalysis(ApiModel):
     """Метаданные партитуры, извлечённые music21 (поле приходит при analyze=true)."""
 
@@ -53,6 +84,7 @@ class FileResult(ApiModel):
     log_url: str | None = Field(default=None, description="Ссылка на лог Audiveris")
     fixed: bool = Field(default=False, description="Был ли файл прогнан через music21 round-trip (сейчас — всегда true при успехе)")
     analysis: ScoreAnalysis | None = Field(default=None, description="Метаданные партитуры (при analyze=true)")
+    texts: ScoreTexts | None = Field(default=None, description="Распознанные тексты, собранные ДО стрипа из XML. Мобила сама показывает их над плеером.")
 
 
 class ValidateResponse(ApiModel):

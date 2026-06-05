@@ -171,6 +171,141 @@ def _strip_text(score) -> None:
         logger.exception("strip: failed to clear part names")
 
 
+def _read_musicxml_root(path: Path) -> "ET.Element | None":
+    """Прочитать корневой <score-partwise>/<score-timewise> из .mxl или .xml.
+
+    Для .mxl распаковывает zip и парсит rootfile (через container.xml или
+    первый подходящий .xml/.musicxml вне META-INF). Возвращает None, если
+    не получилось разобрать.
+    """
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".mxl":
+            with zipfile.ZipFile(path, "r") as zin:
+                entries = {zi.filename: zin.read(zi.filename) for zi in zin.infolist()}
+            rootfile_name: str | None = None
+            container = entries.get("META-INF/container.xml")
+            if container:
+                try:
+                    cr = ET.fromstring(container)
+                    for el in cr.iter():
+                        tag = el.tag.split("}", 1)[-1]
+                        if tag == "rootfile" and el.attrib.get("full-path"):
+                            rootfile_name = el.attrib["full-path"]
+                            break
+                except Exception:
+                    pass
+            if rootfile_name is None:
+                for name in entries:
+                    low = name.lower()
+                    if (low.endswith(".xml") or low.endswith(".musicxml")) \
+                            and not name.startswith("META-INF"):
+                        rootfile_name = name
+                        break
+            if rootfile_name is None or rootfile_name not in entries:
+                return None
+            return ET.fromstring(entries[rootfile_name])
+        return ET.parse(str(path)).getroot()
+    except Exception:
+        logger.exception("read MusicXML root failed for %s", path)
+        return None
+
+
+def collect_texts(path: Path) -> dict:
+    """Собрать ВСЕ текстовые сущности из MusicXML (без стрипа).
+
+    Вызывается ДО `_strip_text_xml` на сыром выходе Audiveris — мобиле возвращаем
+    весь распознанный текст в JSON, чтобы она сама рисовала его в нужном месте
+    (заголовок песни / поверх плеера / в тайм-кодах), а не в нотном рендерере,
+    где она его всё равно не умеет показывать корректно.
+
+    Возвращает структуру (значения None / [] если ничего не нашли):
+      title             — <movement-title> или <work><work-title>
+      composer          — <identification><creator type="composer">
+      credits           — список <credit-words> (визуальные подписи на странице)
+      directions        — список {text, measure, placement} для <words>
+      rehearsals        — список {text, measure} для <rehearsal>
+      lyrics            — список {text, measure} для <lyric><text>
+      part_names        — список <part-name> (имена партий)
+      instrument_names  — список <instrument-name>
+    """
+    empty = {
+        "title": None,
+        "composer": None,
+        "credits": [],
+        "directions": [],
+        "rehearsals": [],
+        "lyrics": [],
+        "part_names": [],
+        "instrument_names": [],
+    }
+    root = _read_musicxml_root(path)
+    if root is None:
+        return empty
+
+    def _txt(el) -> str | None:
+        if el is None or el.text is None:
+            return None
+        s = el.text.strip()
+        return s or None
+
+    out = dict(empty)
+
+    # --- шапка ---
+    out["title"] = _txt(root.find("movement-title"))
+    if not out["title"]:
+        work = root.find("work")
+        if work is not None:
+            out["title"] = _txt(work.find("work-title"))
+
+    for cr in root.findall("identification/creator"):
+        if cr.get("type") == "composer":
+            t = _txt(cr)
+            if t:
+                out["composer"] = t
+                break
+
+    out["credits"] = [
+        t for cw in root.findall(".//credit-words") if (t := _txt(cw))
+    ]
+
+    # --- подписи партий / инструментов ---
+    out["part_names"] = [
+        t for pn in root.findall(".//part-name") if (t := _txt(pn))
+    ]
+    out["instrument_names"] = [
+        t for nm in root.findall(".//instrument-name") if (t := _txt(nm))
+    ]
+
+    # --- текст в теле партитуры (с привязкой к такту) ---
+    directions: list[dict] = []
+    rehearsals: list[dict] = []
+    lyrics: list[dict] = []
+    for part in root.findall("part"):
+        for measure in part.findall("measure"):
+            mnum = measure.get("number")
+            for d in measure.findall("direction"):
+                placement = d.get("placement")
+                for w in d.findall("direction-type/words"):
+                    t = _txt(w)
+                    if t:
+                        directions.append({"text": t, "measure": mnum, "placement": placement})
+                for r in d.findall("direction-type/rehearsal"):
+                    t = _txt(r)
+                    if t:
+                        rehearsals.append({"text": t, "measure": mnum})
+            for note in measure.findall("note"):
+                for lyr in note.findall("lyric"):
+                    # <lyric><text>...</text>[<elision/><text>...</text>...]</lyric>
+                    parts = [t for tx in lyr.findall("text") if (t := _txt(tx))]
+                    if parts:
+                        lyrics.append({"text": " ".join(parts), "measure": mnum})
+    out["directions"] = directions
+    out["rehearsals"] = rehearsals
+    out["lyrics"] = lyrics
+    return out
+
+
 def _scrub_root(root) -> None:
     """In-place: пройтись по дереву MusicXML и убрать текстовые теги.
 

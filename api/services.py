@@ -179,16 +179,24 @@ class AudiverisService:
         """Build a FileResult from a produced output file.
 
         Постобработка делается ВСЕГДА (политика «фиксим всегда»):
-          1) `_strip_text_xml` — выкидываем текстовый шум и утечки путей из сырого
-             выхода Audiveris (.mxl/.xml на месте);
-          2) music21-round-trip через `postprocess` — пересобираем модель,
+          1) `collect_texts` — собираем распознанный текст из сырого .mxl ДО стрипа,
+             отдадим клиенту в `texts` (мобила рисует его сама над плеером);
+          2) `_strip_text_xml` — выкидываем текст и утечки путей (.mxl/.xml на месте);
+          3) music21-round-trip через `postprocess` — пересобираем модель,
              пишем `_fixed.musicxml`, опционально считаем analysis;
-          3) `verovio_check.midi_ok` — если после фикса verovio не собирает MIDI,
-             возвращать такой файл бессмысленно, поднимаем ProcessingError.
+          4) `verovio_check.midi_ok` — если файл не собирается в MIDI,
+             возвращать его бессмысленно, поднимаем ProcessingError.
         """
-        try:
-            from api.analysis import _strip_text_xml
+        from api.analysis import _strip_text_xml, collect_texts, postprocess
+        from api.models import ScoreTexts
 
+        texts: ScoreTexts | None = None
+        try:
+            texts = ScoreTexts.model_validate(collect_texts(output_path))
+        except Exception:
+            logger.exception("text collection failed for %s", output_path)
+
+        try:
             _strip_text_xml(output_path)
         except Exception:
             logger.exception("xml strip failed for %s", output_path)
@@ -196,7 +204,6 @@ class AudiverisService:
         target = output_path
         fixed = False
         analysis = None
-        from api.analysis import postprocess
 
         try:
             target, fixed, analysis = postprocess(output_path, analyze=analyze)
@@ -228,6 +235,7 @@ class AudiverisService:
             log_url=self._build_media_url(log_path) if log_path else None,
             fixed=fixed,
             analysis=analysis,
+            texts=texts,
         )
 
     def process_single(
