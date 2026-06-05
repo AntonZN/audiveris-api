@@ -89,7 +89,6 @@ def _build_task(
     input_files: list[str],
     playlist: bool,
     preset: str = "default",
-    analyze: bool = False,
     enhance: bool = False,
 ) -> dict:
     """Создать словарь задачи."""
@@ -100,7 +99,6 @@ def _build_task(
         "updated_at": _now(),
         "playlist": playlist,
         "preset": preset,
-        "analyze": analyze,
         "enhance": enhance,
         "input_files": input_files,
         "input_dir": str(input_dir),
@@ -143,7 +141,6 @@ def _build_task(
 async def create_single_task(
     file: UploadFile = File(..., description="Файл изображения (PNG, JPG, WebP) или PDF (до 5 страниц)"),
     preset: Preset = Form(Preset.default, description="Пресет обработки"),
-    analyze: bool = Form(False, description="Вернуть метаданные партитуры (тональность, размер, темп, инструменты…) в поле analysis"),
     enhance: bool = Form(False, description="Агрессивная обработка фото/скриншотов (автокроп + апскейл + адаптивная бинаризация) для распознавания мелких/низкокачественных нот"),
 ) -> TaskCreateResponse:
     """Создать задачу OMR для одного файла."""
@@ -183,7 +180,6 @@ async def create_single_task(
         input_files=[input_name],
         playlist=False,
         preset=preset.value,
-        analyze=analyze,
         enhance=enhance,
     )
     repo.save(task)
@@ -225,7 +221,6 @@ async def create_single_task(
 async def create_batch_task(
     files: list[UploadFile] = File(..., description="Файлы изображений (PNG, JPG)"),
     preset: Preset = Form(Preset.default, description="Пресет обработки"),
-    analyze: bool = Form(False, description="Вернуть метаданные партитуры (тональность, размер, темп, инструменты…) в поле analysis"),
     enhance: bool = Form(False, description="Агрессивная обработка фото/скриншотов (автокроп + апскейл + адаптивная бинаризация) для распознавания мелких/низкокачественных нот"),
 ) -> TaskCreateResponse:
     """Создать задачу OMR для нескольких файлов (плейлист)."""
@@ -248,7 +243,6 @@ async def create_batch_task(
         input_files=input_files,
         playlist=True,
         preset=preset.value,
-        analyze=analyze,
         enhance=enhance,
     )
     repo.save(task)

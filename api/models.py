@@ -62,7 +62,7 @@ class ScoreTexts(ApiModel):
 
 
 class ScoreAnalysis(ApiModel):
-    """Метаданные партитуры, извлечённые music21 (поле приходит при analyze=true)."""
+    """Метаданные партитуры от music21. Считаются всегда."""
 
     key: str | None = Field(default=None, description="Определённая тональность")
     key_confidence: float | None = Field(default=None, description="Уверенность определения тональности (0..1)")
@@ -83,7 +83,8 @@ class FileResult(ApiModel):
     error: str | None = Field(default=None, description="Сообщение об ошибке")
     log_url: str | None = Field(default=None, description="Ссылка на лог Audiveris")
     fixed: bool = Field(default=False, description="Был ли файл прогнан через music21 round-trip (сейчас — всегда true при успехе)")
-    analysis: ScoreAnalysis | None = Field(default=None, description="Метаданные партитуры (при analyze=true)")
+    bpm: int | None = Field(default=None, description="Темп начала песни (целое число BPM). None — Audiveris BPM не нашёл.")
+    analysis: ScoreAnalysis | None = Field(default=None, description="Метаданные партитуры от music21 (тональность, размеры, список темпов, инструменты…)")
     texts: ScoreTexts | None = Field(default=None, description="Распознанные тексты, собранные ДО стрипа из XML. Мобила сама показывает их над плеером.")
 
 

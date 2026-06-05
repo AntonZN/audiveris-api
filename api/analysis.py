@@ -211,6 +211,40 @@ def _read_musicxml_root(path: Path) -> "ET.Element | None":
         return None
 
 
+def collect_bpm(path: Path) -> int | None:
+    """Достать BPM прямо из MusicXML (без music21). Работает на .mxl и .xml.
+
+    Источники в порядке предпочтения:
+      1) <sound tempo="N"/>          — самое надёжное, Audiveris всегда дублирует
+                                       сюда числовое значение, даже если оно из
+                                       словесной ремарки.
+      2) <metronome><per-minute>N    — нотный метроном (точка с цифрой).
+
+    Берём первое попавшееся валидное число и **округляем до ближайшего целого** —
+    Audiveris из-за внутренних float-преобразований иногда отдаёт «59.99999999»
+    или «72.00000001», мобиле такое показывать незачем. Если темпов нет
+    вообще — возвращаем None (Audiveris часто не находит BPM на скриншотах низкого
+    разрешения или партитурах с только словесными ремарками типа «Adagio»).
+    """
+    root = _read_musicxml_root(path)
+    if root is None:
+        return None
+    for sound in root.iter("sound"):
+        val = sound.get("tempo")
+        if val:
+            try:
+                return round(float(val))
+            except ValueError:
+                continue
+    for pm in root.iter("per-minute"):
+        if pm.text:
+            try:
+                return round(float(pm.text.strip()))
+            except ValueError:
+                continue
+    return None
+
+
 def collect_texts(path: Path) -> dict:
     """Собрать ВСЕ текстовые сущности из MusicXML (без стрипа).
 

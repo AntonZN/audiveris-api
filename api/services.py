@@ -174,21 +174,28 @@ class AudiverisService:
         self,
         output_path: Path,
         log_path: Path | None,
-        analyze: bool,
     ) -> FileResult:
         """Build a FileResult from a produced output file.
 
-        Постобработка делается ВСЕГДА (политика «фиксим всегда»):
-          1) `collect_texts` — собираем распознанный текст из сырого .mxl ДО стрипа,
-             отдадим клиенту в `texts` (мобила рисует его сама над плеером);
+        Постобработка делается ВСЕГДА (одна-единственная политика):
+          1) `collect_bpm` + `collect_texts` — выдёргиваем темп и распознанный
+             текст из сырого .mxl ДО стрипа (мобиле они нужны как метаданные,
+             а в xml-плеере всё равно не рисуются);
           2) `_strip_text_xml` — выкидываем текст и утечки путей (.mxl/.xml на месте);
           3) music21-round-trip через `postprocess` — пересобираем модель,
-             пишем `_fixed.musicxml`, опционально считаем analysis;
+             пишем `_fixed.musicxml`, считаем analysis (тональность/размеры/список
+             темпов/инструменты);
           4) `verovio_check.midi_ok` — если файл не собирается в MIDI,
              возвращать его бессмысленно, поднимаем ProcessingError.
         """
-        from api.analysis import _strip_text_xml, collect_texts, postprocess
+        from api.analysis import _strip_text_xml, collect_bpm, collect_texts, postprocess
         from api.models import ScoreTexts
+
+        bpm: int | None = None
+        try:
+            bpm = collect_bpm(output_path)
+        except Exception:
+            logger.exception("bpm collection failed for %s", output_path)
 
         texts: ScoreTexts | None = None
         try:
@@ -206,7 +213,7 @@ class AudiverisService:
         analysis = None
 
         try:
-            target, fixed, analysis = postprocess(output_path, analyze=analyze)
+            target, fixed, analysis = postprocess(output_path, analyze=True)
         except Exception:
             logger.exception("music21 post-processing failed for %s", output_path)
 
@@ -234,6 +241,7 @@ class AudiverisService:
             url=self._build_media_url(target),
             log_url=self._build_media_url(log_path) if log_path else None,
             fixed=fixed,
+            bpm=bpm,
             analysis=analysis,
             texts=texts,
         )
@@ -243,7 +251,6 @@ class AudiverisService:
         input_path: Path,
         output_dir: Path,
         preset: str = "default",
-        analyze: bool = False,
         enhance: bool = False,
     ) -> FileResult:
         """Process a single input file and return a FileResult."""
@@ -251,7 +258,7 @@ class AudiverisService:
             output_path, log_path, interline = self._run_audiveris(
                 input_path, output_dir, preset, enhance
             )
-            return self._build_success_result(output_path, log_path, analyze)
+            return self._build_success_result(output_path, log_path)
         except LowInterlineError as exc:
             return FileResult(
                 filename=input_path.name,
@@ -270,7 +277,6 @@ class AudiverisService:
         input_paths: list[Path],
         output_dir: Path,
         preset: str = "default",
-        analyze: bool = False,
         enhance: bool = False,
     ) -> FileResult:
         """Process multiple files as a playlist (single book) and return a FileResult."""
@@ -278,7 +284,7 @@ class AudiverisService:
             output_path, log_path, interline = self._run_audiveris_playlist(
                 input_paths, output_dir, preset, enhance
             )
-            return self._build_success_result(output_path, log_path, analyze)
+            return self._build_success_result(output_path, log_path)
         except LowInterlineError as exc:
             return FileResult(
                 filename="playlist",
