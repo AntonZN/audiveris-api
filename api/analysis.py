@@ -340,8 +340,35 @@ def collect_texts(path: Path) -> dict:
     return out
 
 
+def _sanitize_divisions(root) -> None:
+    """Заменить <divisions>0</divisions> (или пустое/нечисловое) на 480.
+
+    Audiveris изредка выплёвывает <divisions>0</divisions>, на котором music21
+    при парсинге валится с `ZeroDivisionError` внутри `xmlToDuration`
+    (`noteDivisions / divisions`) — без шанса перехватить выше уровня одной
+    конкретной ноты. По смыслу MusicXML 0 не имеет интерпретации (количество
+    делений четверти не может быть нулём), поэтому замена на 480 (один из
+    стандартных значений) безопасна: длительности нот в этой партии будут
+    выражены в той же шкале относительно друг друга.
+    """
+    DEFAULT = 480
+    for div in root.iter("divisions"):
+        text = (div.text or "").strip()
+        try:
+            val = int(text)
+        except ValueError:
+            val = 0
+        if val <= 0:
+            logger.warning(
+                "MusicXML <divisions>=%r — replacing with %d for music21 safety",
+                text, DEFAULT,
+            )
+            div.text = str(DEFAULT)
+
+
 def _scrub_root(root) -> None:
-    """In-place: пройтись по дереву MusicXML и убрать текстовые теги.
+    """In-place: пройтись по дереву MusicXML, убрать текстовые теги и починить
+    деления (см. _sanitize_divisions), чтобы music21 не падал при парсинге.
 
     Удаляет целиком всё из _XML_DROP_TAGS, обнуляет содержимое _XML_BLANK_TAGS.
     Не валится, если структура неожиданная — просто логирует.
@@ -355,6 +382,7 @@ def _scrub_root(root) -> None:
                     child.text = ""
                     for sub in list(child):
                         child.remove(sub)
+        _sanitize_divisions(root)
     except Exception:
         logger.exception("xml strip: scrub failed")
 
