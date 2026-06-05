@@ -298,6 +298,18 @@ class AudiverisService:
                 log_url=self._build_media_url(exc.log_path) if exc.log_path else None,
             )
 
+    # Audiveris ловит «новый movement» по indented system'у (см. SystemManager.java).
+    # На фотках/скриншотах одной песни это даёт false positive: если на каком-то
+    # system OMR не нашёл один из staff'ов, его левый край «сдвигается» и Audiveris
+    # начинает писать .mvt2.mxl, .mvt3.mxl. На выходе клиенту уходит только .mvt1
+    # (sorted()[0] в _find_outputs) — мобила играет первую треть песни и обрывает.
+    # Для одиночной фотки и плейлиста (всегда одна песня по нескольким снимкам)
+    # детекцию выключаем; для многостраничного PDF оставляем — он реально может
+    # быть многочастной сонатой, где разделение полезно.
+    _NO_MOVEMENT_SPLIT = [
+        "-constant", "org.audiveris.omr.sheet.ProcessingSwitches.indentations=false",
+    ]
+
     def _run_audiveris(
             self, input_path: Path, output_dir: Path, preset: str = "default",
             enhance: bool = False,
@@ -309,10 +321,14 @@ class AudiverisService:
         preset_enum = Preset(preset) if preset else Preset.default
         preset_args = get_preset_args(preset_enum)
 
+        is_pdf = input_path.suffix.lower() == ".pdf"
+        movement_args = [] if is_pdf else self._NO_MOVEMENT_SPLIT
+
         cmd = [
             settings.audiveris_cmd,
             "-batch",
             "-constant", f"org.audiveris.omr.sheet.ScaleBuilder.minInterline={settings.min_interline}",
+            *movement_args,
             *preset_args,
             "-transcribe", "-export",
             "-output", str(output_dir),
@@ -396,6 +412,11 @@ class AudiverisService:
             settings.audiveris_cmd,
             "-batch",
             "-constant", f"org.audiveris.omr.sheet.ScaleBuilder.minInterline={settings.min_interline}",
+            # Плейлист — это всегда одна песня по нескольким фотографиям, поэтому
+            # детекцию indented systems выключаем (см. _NO_MOVEMENT_SPLIT). Аргумент
+            # дублируется и в cmd_export, потому что -constant действует только в
+            # рамках одного JVM-вызова Audiveris.
+            *self._NO_MOVEMENT_SPLIT,
             *preset_args,
             "-playlist", str(playlist_path),
             "-output", str(output_dir),
@@ -426,6 +447,7 @@ class AudiverisService:
             settings.audiveris_cmd,
             "-batch",
             "-constant", f"org.audiveris.omr.sheet.ScaleBuilder.minInterline={settings.min_interline}",
+            *self._NO_MOVEMENT_SPLIT,
             *preset_args,
             "-transcribe",
             "-export",

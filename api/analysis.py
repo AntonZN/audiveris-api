@@ -366,11 +366,38 @@ def _sanitize_divisions(root) -> None:
             div.text = str(DEFAULT)
 
 
+def _sanitize_clefs(root) -> None:
+    """Зажать <clef><line>N</line></clef> в диапазон 1..5.
+
+    music21 при парсинге зовёт `clefFromString(sign + line)` и для line > 5 или
+    < 1 кидает `ClefException` без шанса перехватить выше — вся партия мрёт.
+    Audiveris изредка выдаёт `<line>6</line>` на нотоносцах, где у нормальных
+    ключей такого положения не бывает (видимо, OMR-косяк с табулатурами или
+    шестилинейными нестандартными станами). Безопасный fallback — зажать в [1,5]:
+    G2/F4/C3 это и есть скрипичный/басовый/альтовый, ничего ближе не предложишь.
+    """
+    for clef in root.iter("clef"):
+        line_el = clef.find("line")
+        if line_el is None or not line_el.text:
+            continue
+        try:
+            n = int(line_el.text.strip())
+        except ValueError:
+            continue
+        if n < 1 or n > 5:
+            new = max(1, min(5, n))
+            logger.warning(
+                "MusicXML <clef><line>=%d outside [1..5]; clamping to %d", n, new,
+            )
+            line_el.text = str(new)
+
+
 def _scrub_root(root) -> None:
     """In-place: пройтись по дереву MusicXML, убрать текстовые теги и починить
-    деления (см. _sanitize_divisions), чтобы music21 не падал при парсинге.
+    структурные дефекты (deviding, clefs), на которых music21 валится при парсе.
 
-    Удаляет целиком всё из _XML_DROP_TAGS, обнуляет содержимое _XML_BLANK_TAGS.
+    Удаляет целиком всё из _XML_DROP_TAGS, обнуляет содержимое _XML_BLANK_TAGS,
+    плюс зовёт защитные правки (см. _sanitize_divisions / _sanitize_clefs).
     Не валится, если структура неожиданная — просто логирует.
     """
     try:
@@ -383,6 +410,7 @@ def _scrub_root(root) -> None:
                     for sub in list(child):
                         child.remove(sub)
         _sanitize_divisions(root)
+        _sanitize_clefs(root)
     except Exception:
         logger.exception("xml strip: scrub failed")
 
