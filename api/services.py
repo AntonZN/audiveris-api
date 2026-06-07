@@ -328,7 +328,7 @@ class AudiverisService:
             settings.audiveris_cmd,
             "-batch",
             "-constant", f"org.audiveris.omr.sheet.ScaleBuilder.minInterline={settings.min_interline}",
-            *movement_args,
+            # *movement_args,
             *preset_args,
             "-transcribe", "-export",
             "-output", str(output_dir),
