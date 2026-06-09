@@ -177,18 +177,19 @@ class AudiverisService:
     ) -> FileResult:
         """Build a FileResult from a produced output file.
 
-        Постобработка делается ВСЕГДА (одна-единственная политика):
+        ТЕСТОВАЯ политика (без music21-фикса):
           1) `collect_bpm` + `collect_texts` — выдёргиваем темп и распознанный
              текст из сырого .mxl ДО стрипа (мобиле они нужны как метаданные,
              а в xml-плеере всё равно не рисуются);
-          2) `_strip_text_xml` — выкидываем текст и утечки путей (.mxl/.xml на месте);
-          3) music21-round-trip через `postprocess` — пересобираем модель,
-             пишем `_fixed.musicxml`, считаем analysis (тональность/размеры/список
-             темпов/инструменты);
-          4) `verovio_check.midi_ok` — если файл не собирается в MIDI,
-             возвращать его бессмысленно, поднимаем ProcessingError.
+          2) `_strip_text_xml` — выкидываем текст и утечки путей (.mxl на месте);
+          3) `analyze_only` — music21 ТОЛЬКО парсит и считает analysis
+             (тональность/размеры/темпы/инструменты), модель НЕ пересобираем
+             и `_fixed.musicxml` НЕ пишем;
+          4) `verovio_check.midi_ok` — проверяем прямо выход Audiveris: если он
+             не собирается в MIDI, отдавать его бессмысленно (приложение всё равно
+             не воспроизведёт), поднимаем ProcessingError.
         """
-        from api.analysis import _strip_text_xml, collect_bpm, collect_texts, postprocess
+        from api.analysis import _strip_text_xml, analyze_only, collect_bpm, collect_texts
         from api.models import ScoreTexts
 
         bpm: int | None = None
@@ -208,39 +209,30 @@ class AudiverisService:
         except Exception:
             logger.exception("xml strip failed for %s", output_path)
 
-        target = output_path
-        fixed = False
         analysis = None
-
         try:
-            target, fixed, analysis = postprocess(output_path, analyze=True)
+            analysis = analyze_only(output_path)
         except Exception:
-            logger.exception("music21 post-processing failed for %s", output_path)
+            logger.exception("music21 analysis failed for %s", output_path)
 
         # verovio renderToMIDI — это «контракт» с мобильным клиентом: ровно тот же
-        # вызов, что у него внутри. Если файл его не проходит — отдавать смысла нет.
-        # Проверяем и при успешном фиксе, и при «фикс не удался, возвращаем оригинал»:
-        # последний случай не редок (music21 регулярно валится на странных партитурах
-        # своими внутренними KeyError'ами), и тогда исходный .mxl — единственное,
-        # что у нас есть.
+        # вызов, что у него внутри. Проверяем СРАЗУ то, что отдал Audiveris (без
+        # music21-фикса). Если файл его не проходит — отдавать смысла нет, иначе
+        # приложение попытается воспроизвести и упадёт.
         from api.verovio_check import midi_ok
 
-        if not midi_ok(target):
+        if not midi_ok(output_path):
             detail = (
-                "Не удалось получить валидный MusicXML: verovio renderToMIDI падает "
-                "после фикса"
-                if fixed
-                else "Не удалось получить валидный MusicXML: music21 не смог "
-                     "пересобрать файл, а исходный выход Audiveris не рендерится "
-                     "в MIDI через verovio"
+                "Не удалось получить валидный MusicXML: выход Audiveris не "
+                "рендерится в MIDI через verovio"
             )
             raise ProcessingError(detail, log_path=log_path)
 
         return FileResult(
-            filename=target.name,
-            url=self._build_media_url(target),
+            filename=output_path.name,
+            url=self._build_media_url(output_path),
             log_url=self._build_media_url(log_path) if log_path else None,
-            fixed=fixed,
+            fixed=False,
             bpm=bpm,
             analysis=analysis,
             texts=texts,

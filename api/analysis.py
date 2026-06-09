@@ -575,6 +575,28 @@ def repair(path: Path, out_dir: Path | None = None) -> Path | None:
     return fixed_path
 
 
+def analyze_only(path: Path) -> dict | None:
+    """Посчитать метаданные партитуры БЕЗ music21-фикса (без записи _fixed).
+
+    Тестовый путь: music21 только парсит файл и считает analysis
+    (тональность/размеры/темпы/инструменты), но мы НЕ пересобираем модель и
+    НЕ пишем `_fixed.musicxml`. Любой сбой music21 → None, задача не падает.
+    """
+    from music21 import converter
+
+    try:
+        score = converter.parse(str(path))
+    except Exception:
+        logger.exception("music21 failed to parse %s; skipping analysis", path)
+        return None
+
+    try:
+        return _analyze_score(score)
+    except Exception:
+        logger.exception("music21 failed to analyze %s", path)
+        return None
+
+
 def postprocess(
     path: Path, analyze: bool = False
 ) -> tuple[Path, bool, dict | None]:
