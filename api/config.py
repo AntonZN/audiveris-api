@@ -37,8 +37,8 @@ class Settings(BaseSettings):
     image_sharpness_factor: float = 1.5  # Sharpness enhancement
 
     # --- homr (фото-OMR) ---
-    # Для single-задач, где на вход пришло ФОТО (JPEG/HEIC), распознавание идёт
-    # не через Audiveris, а через трансформерный homr — он устойчивее к перекосу,
+    # Для single-задач любое одиночное ИЗОБРАЖЕНИЕ (JPEG/HEIC/PNG/WebP) идёт не
+    # через Audiveris, а через трансформерный homr — он устойчивее к перекосу,
     # шуму и перспективе телефонных снимков. homr ставится как обычная зависимость
     # (см. requirements.txt / pyproject) и работает в том же окружении; вызывается
     # отдельным процессом (sys.executable -m homr.main), чтобы тяжёлый onnxruntime

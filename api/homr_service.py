@@ -17,21 +17,26 @@ import sys
 import zipfile
 from pathlib import Path
 
+from PIL import Image
+
 from api.config import settings
 from api.exceptions import ProcessingError
 
 logger = logging.getLogger(__name__)
 
-# Magic bytes форматов, которые считаем «фото» (→ homr).
+# Magic bytes растровых форматов, которые в /single уходят в homr.
 _MAGIC_JPEG = b"\xff\xd8\xff"
+_MAGIC_PNG = b"\x89PNG\r\n\x1a\n"
+_MAGIC_RIFF = b"RIFF"  # WebP = "RIFF"<size>"WEBP"
 # HEIC/HEIF: байты 4..12 вида "ftyp<brand>", brand ∈ {heic,heix,heif,mif1,...}.
 _HEIF_BRANDS = {b"heic", b"heix", b"heif", b"hevc", b"mif1", b"msf1"}
 
 
 def is_photo(path: Path) -> bool:
-    """True, если файл — телефонное фото (JPEG или HEIC/HEIF).
+    """True для растрового изображения (JPEG/HEIC/PNG/WebP) — такие идут в homr.
 
-    PNG/WebP/PDF к фото не относим — они идут через Audiveris.
+    Только PDF остаётся за Audiveris. Имя историческое: «photo» здесь = любое
+    одиночное изображение, не PDF.
     """
     try:
         with path.open("rb") as f:
@@ -41,9 +46,23 @@ def is_photo(path: Path) -> bool:
 
     if header.startswith(_MAGIC_JPEG):
         return True
+    if header.startswith(_MAGIC_PNG):
+        return True
+    if header.startswith(_MAGIC_RIFF) and header[8:12] == b"WEBP":
+        return True
     if header[4:8] == b"ftyp" and header[8:12] in _HEIF_BRANDS:
         return True
     return False
+
+
+def _is_webp(path: Path) -> bool:
+    """True, если файл — WebP (по magic bytes, независимо от расширения)."""
+    try:
+        with path.open("rb") as f:
+            header = f.read(12)
+    except OSError:
+        return False
+    return header.startswith(_MAGIC_RIFF) and header[8:12] == b"WEBP"
 
 
 def _pack_mxl(musicxml_path: Path, mxl_path: Path) -> None:
@@ -105,8 +124,14 @@ class HomrService:
             shutil.rmtree(work_dir, ignore_errors=True)
         work_dir.mkdir(parents=True, exist_ok=True)
 
-        work_img = work_dir / input_path.name
-        shutil.copyfile(input_path, work_img)
+        # WebP homr читает ненадёжно — приводим к JPG (как и Audiveris-пайплайн).
+        if input_path.suffix.lower() == ".webp" or _is_webp(input_path):
+            work_img = work_dir / f"{input_path.stem}.jpg"
+            with Image.open(input_path) as img:
+                img.convert("RGB").save(work_img, "JPEG", quality=95)
+        else:
+            work_img = work_dir / input_path.name
+            shutil.copyfile(input_path, work_img)
 
         # homr — обычная зависимость в этом же venv; зовём его тем же интерпретатором.
         # homr пишет <stem>.musicxml рядом с переданным (абсолютным) путём к картинке.
