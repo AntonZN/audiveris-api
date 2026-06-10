@@ -20,6 +20,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         fontconfig \
         libfreetype6 \
+        libcairo2 \
         python3 \
         python3-venv \
         tesseract-ocr \
@@ -51,6 +52,10 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 COPY api/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Запекаем ONNX-модели homr (сегментация + трансформер + OCR заголовков) в образ,
+# чтобы первый запрос не качал их в рантайме.
+RUN homr --init
 
 COPY api /srv/api
 

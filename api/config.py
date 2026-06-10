@@ -36,6 +36,28 @@ class Settings(BaseSettings):
     image_contrast_factor: float = 1.2  # Contrast enhancement
     image_sharpness_factor: float = 1.5  # Sharpness enhancement
 
+    # --- homr (фото-OMR) ---
+    # Для single-задач, где на вход пришло ФОТО (JPEG/HEIC), распознавание идёт
+    # не через Audiveris, а через трансформерный homr — он устойчивее к перекосу,
+    # шуму и перспективе телефонных снимков. homr ставится как обычная зависимость
+    # (см. requirements.txt / pyproject) и работает в том же окружении; вызывается
+    # отдельным процессом (sys.executable -m homr.main), чтобы тяжёлый onnxruntime
+    # не жил в памяти веб-воркера.
+    homr_enabled: bool = True
+    homr_timeout_seconds: int = 180
+
+    # --- Каталог нот / админка ---
+    # Postgres. Внутри docker-compose host = "postgres".
+    database_url: str = "postgresql+psycopg2://catalog:catalog@postgres:5432/catalog"
+    # Корневая директория, куда складываются загруженные через админку медиа
+    # (обложки, musicxml, midi, mp3, pdf). Лежит внутри media_root, чтобы её
+    # раздавал тот же /media/* (Caddy -> /storage/out).
+    catalog_media_dir: str = "/storage/out/catalog"
+    # Логин в админку SQLAdmin (одна учётка).
+    admin_username: str = "admin"
+    admin_password: str = "admin"
+    # Секрет для подписи session-cookie админки. ОБЯЗАТЕЛЬНО переопределить в проде.
+    admin_secret: str = "change-me-in-production"
 
     class Config:
         env_prefix = ""

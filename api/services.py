@@ -11,6 +11,7 @@ from PIL import Image, ImageEnhance
 
 from api.config import settings
 from api.exceptions import LowInterlineError, ProcessingError
+from api.homr_service import homr_service, is_photo
 from api.models import FileResult
 from api.presets import Preset, get_preset_args
 
@@ -245,11 +246,20 @@ class AudiverisService:
         preset: str = "default",
         enhance: bool = False,
     ) -> FileResult:
-        """Process a single input file and return a FileResult."""
+        """Process a single input file and return a FileResult.
+
+        Если на вход пришло ФОТО (JPEG/HEIC), распознаём через homr — он
+        устойчивее к перекосу/шуму/перспективе телефонных снимков. PNG/WebP/PDF
+        идут стандартным путём через Audiveris. Постобработка (analysis/bpm/texts +
+        проверка midi_ok) для обоих движков одна и та же.
+        """
         try:
-            output_path, log_path, interline = self._run_audiveris(
-                input_path, output_dir, preset, enhance
-            )
+            if settings.homr_enabled and is_photo(input_path):
+                output_path, log_path = homr_service.run(input_path, output_dir)
+            else:
+                output_path, log_path, interline = self._run_audiveris(
+                    input_path, output_dir, preset, enhance
+                )
             return self._build_success_result(output_path, log_path)
         except LowInterlineError as exc:
             return FileResult(
