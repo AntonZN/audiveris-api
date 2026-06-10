@@ -21,6 +21,8 @@ RUN apt-get update \
         fontconfig \
         libfreetype6 \
         libcairo2 \
+        libgl1 \
+        libglib2.0-0 \
         python3 \
         python3-venv \
         tesseract-ocr \
