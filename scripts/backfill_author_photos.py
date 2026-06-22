@@ -24,7 +24,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 import httpx  # noqa: E402
-from sqlalchemy import or_, select  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 
 from api.catalog_models import Author  # noqa: E402
 from api.db import SessionLocal  # noqa: E402
@@ -46,8 +46,11 @@ def main() -> None:
     )
     db = SessionLocal()
     try:
+        # Сравнивать Author.photo с "" нельзя: пустую строку прогоняет бинд-
+        # процессор ImageType, который ждёт upload-объект. Незаполненное фото —
+        # это NULL, поэтому фильтруем только по IS NULL.
         stmt = select(Author).where(
-            or_(Author.photo.is_(None), Author.photo == ""),
+            Author.photo.is_(None),
             Author.wikidata.isnot(None),
             Author.wikidata != "",
         )
