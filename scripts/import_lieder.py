@@ -139,11 +139,19 @@ def _want_set(row: dict, sets_mode: str) -> bool:
 
 
 class _LocalUpload:
-    """Минимальный upload-объект для FileType (нужны .file и .filename)."""
+    """Минимальный upload-объект для FileType (нужны .file и .filename).
+
+    Держит открытый файловый дескриптор, поэтому после записи в хранилище
+    (db.flush) его обязательно закрыть через close(), иначе на полном импорте
+    корпуса (1300+ нот × до 4 файлов) исчерпываются файловые дескрипторы.
+    """
 
     def __init__(self, path: Path, filename: str) -> None:
         self.file = open(path, "rb")
         self.filename = filename
+
+    def close(self) -> None:
+        self.file.close()
 
 
 class _BytesUpload:
@@ -243,24 +251,27 @@ def _generate_cover(db: Session, score: Score) -> bool:
     return True
 
 
-def _attach_media(score: Score, score_dir: Path) -> int:
+def _attach_media(score: Score, score_dir: Path) -> list[_LocalUpload]:
     """Привязать сконвертированные файлы из локального каталога ноты.
 
     FileType сам запишет файл в хранилище каталога. Уже привязанные поля
     пропускаем, чтобы повторный импорт не плодил копии.
+
+    Возвращает созданные upload-объекты — их нужно закрыть после db.flush().
     """
     if not score_dir.is_dir():
-        return 0
-    attached = 0
+        return []
+    uploads: list[_LocalUpload] = []
     for field, ext in MEDIA_EXT.items():
         if getattr(score, field):
             continue
         matches = sorted(score_dir.glob(f"*{ext}"))
         if not matches:
             continue
-        setattr(score, field, _LocalUpload(matches[0], f"lieder-{score.source_id}{ext}"))
-        attached += 1
-    return attached
+        upload = _LocalUpload(matches[0], f"lieder-{score.source_id}{ext}")
+        setattr(score, field, upload)
+        uploads.append(upload)
+    return uploads
 
 
 def run(
@@ -359,13 +370,18 @@ def run(
 
             # Медиа: из локального клона или скачиваем готовый .mxl с GitHub.
             path = row.get("path") or ""
+            local_uploads: list[_LocalUpload] = []
             if repo_dir and path:
-                media_attached += _attach_media(score, repo_dir / "scores" / path)
+                local_uploads = _attach_media(score, repo_dir / "scores" / path)
+                media_attached += len(local_uploads)
             elif download_mxl and _download_mxl(client, score, path):
                 media_attached += 1
 
             db.add(score)
             db.flush()  # пишет music_file на диск -> доступен путь для рендера обложки
+            # Файлы записаны в хранилище — закрываем открытые дескрипторы _LocalUpload.
+            for upload in local_uploads:
+                upload.close()
 
             # Обложка: рендерим из привязанного .mxl через verovio.
             if generate_cover and _generate_cover(db, score):

@@ -39,7 +39,7 @@ from sqlalchemy import func, select, text  # noqa: E402
 from api import catalog_models  # noqa: E402,F401  (регистрирует таблицы в metadata)
 from api import stats_models  # noqa: E402,F401  (чтобы знать имя таблицы статистики)
 from api.config import settings  # noqa: E402
-from api.db import Base, engine, init_db  # noqa: E402
+from api.db import Base, engine, init_db, run_migrations  # noqa: E402
 
 # Статистика OMR живёт постоянно — НЕ чистим её при сбросе каталога.
 STATS_TABLES = {stats_models.ProcessingEvent.__tablename__}
@@ -69,7 +69,12 @@ def wipe_db(reset_ids: bool) -> None:
 
 def drop_and_recreate() -> None:
     Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
+    # Сбрасываем версию Alembic: иначе `upgrade head` решит, что схема уже на
+    # месте, и не пересоздаст таблицы. После — накатываем миграции с нуля, чтобы
+    # единственным источником схемы оставался Alembic.
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
+    run_migrations()
 
 
 def wipe_media() -> int:
