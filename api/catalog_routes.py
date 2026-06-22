@@ -145,7 +145,7 @@ def list_collections(
 ) -> list[CollectionListItem]:
     """Опубликованные подборки (кураторские списки нот), в порядке `position`.
     `?featured=true` — только избранные, для блока на главной. Возвращает краткие
-    карточки с `itemsCount`; за составом идите в `GET /catalog/collections/{slug}`."""
+    карточки с `itemsCount`; за составом идите в `GET /catalog/collections/{id}`."""
     stmt = select(Collection).where(Collection.is_published.is_(True))
     if featured is not None:
         stmt = stmt.where(Collection.is_featured.is_(featured))
@@ -166,16 +166,16 @@ def list_collections(
 
 
 @router.get(
-    "/collections/{slug}",
+    "/collections/{collection_id}",
     response_model=CollectionDetail,
-    summary="Подборка с нотами",
+    summary="Подборка с нотами (по id)",
 )
-def get_collection(slug: str, db: Session = Depends(get_db)) -> CollectionDetail:
-    """Подборка по `slug` вместе с её нотами (`scores`, краткие карточки) в
+def get_collection(collection_id: int, db: Session = Depends(get_db)) -> CollectionDetail:
+    """Подборка по `id` вместе с её нотами (`scores`, краткие карточки) в
     заданном порядке. Только опубликованные ноты. 404, если подборки нет."""
     c = db.execute(
         select(Collection)
-        .where(Collection.slug == slug, Collection.is_published.is_(True))
+        .where(Collection.id == collection_id, Collection.is_published.is_(True))
         .options(
             selectinload(Collection.items),
         )
@@ -243,8 +243,8 @@ def list_scores(
 
     **Поля `items` — краткие** (обложка, автор-строка, формат, сложность, стиль,
     агрегаты рейтинга/проигрываний). За полной карточкой, файлами (MusicXML/MIDI/
-    MP3/PDF) и списками жанров/инструментов идите в `GET /catalog/scores/{slug}`
-    по полю `slug` из элемента списка.
+    MP3/PDF) и списками жанров/инструментов идите в `GET /catalog/scores/{id}`
+    по полю `id` из элемента списка.
 
     **Формат ответа** — camelCase (`coverUrl`, `ratingAvg`, `pageSize` …);
     `*Url`-поля — абсолютные ссылки на медиа (можно подставлять в `src`).
@@ -287,17 +287,18 @@ def list_scores(
     )
 
 
-@router.get("/scores/{slug}", response_model=ScoreDetail, summary="Карточка ноты")
-def get_score(slug: str, db: Session = Depends(get_db)) -> ScoreDetail:
-    """Полная карточка ноты по `slug`: описание, объект автора (`authorObj`),
+@router.get("/scores/{score_id}", response_model=ScoreDetail, summary="Карточка ноты (по id)")
+def get_score(score_id: int, db: Session = Depends(get_db)) -> ScoreDetail:
+    """Полная карточка ноты по `id`: описание, объект автора (`authorObj`),
     жанры/инструменты и ссылки на файлы — `musicXmlUrl`, `midiUrl`, `audioUrl`,
     `pdfUrl` (любая может быть null, если файл не привязан). 404, если нет ноты.
 
-    `slug` берётся из элемента списка `GET /catalog/scores`. Это «экран ноты»:
-    тут лежат медиа для плеера/просмотра, в отличие от краткой карточки списка."""
+    `id` берётся из поля `id` элемента списка `GET /catalog/scores`. Это «экран
+    ноты»: тут лежат медиа для плеера/просмотра, в отличие от краткой карточки
+    списка."""
     s = db.execute(
         select(Score)
-        .where(Score.slug == slug, Score.is_published.is_(True))
+        .where(Score.id == score_id, Score.is_published.is_(True))
         .options(
             selectinload(Score.author),
             selectinload(Score.style),
