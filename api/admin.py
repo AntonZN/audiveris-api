@@ -58,6 +58,43 @@ from api.config import settings
 from api.stats_models import ProcessingEvent
 from api.db import engine
 
+from urllib.parse import urlsplit
+
+from markupsafe import Markup
+
+from api.storage import file_public_url
+
+
+def _media_src(value) -> str | None:
+    """Root-relative URL медиа-файла каталога (без хоста и схемы).
+
+    Берём публичный URL из file_public_url и оставляем только путь, чтобы <img>
+    в админке наследовал https самой страницы и не ловил mixed-content (медиа
+    раздаётся тем же доменом через Caddy /media/*)."""
+    url = file_public_url(value)
+    if not url:
+        return None
+    parts = urlsplit(url)
+    src = parts.path + (f"?{parts.query}" if parts.query else "")
+    return src or url
+
+
+def _image_formatter(attr_name: str, size: int = 60):
+    """Фабрика форматтера колонки: показывает ImageType-поле как <img>, а не
+    текстовый путь к файлу. size — высота превью в px."""
+
+    def _fmt(model, attribute):
+        src = _media_src(getattr(model, attr_name, None))
+        if not src:
+            return ""
+        return Markup(
+            f'<img src="{src}" alt="" loading="lazy" '
+            f'style="height:{size}px;width:auto;max-width:{size * 2}px;'
+            'object-fit:contain;border-radius:4px;background:#f3f4f6;">'
+        )
+
+    return _fmt
+
 
 class AdminAuth(AuthenticationBackend):
     async def login(self, request: Request) -> bool:
@@ -85,10 +122,13 @@ class AuthorAdmin(ModelView, model=Author):
     name_plural = "Авторы"
     category = "Каталог"
     icon = "fa-solid fa-user-pen"
-    column_list = [Author.id, Author.name, Author.born, Author.died, Author.source]
+    column_list = [Author.photo, Author.id, Author.name, Author.born, Author.died, Author.source]
     column_searchable_list = [Author.name]
     column_sortable_list = [Author.id, Author.name]
     form_excluded_columns = [Author.slug, Author.scores, Author.created_at]
+    # Показываем фото как картинку, а не путь к файлу.
+    column_formatters = {Author.photo: _image_formatter("photo")}
+    column_formatters_detail = {Author.photo: _image_formatter("photo", size=240)}
 
 
 class GenreAdmin(ModelView, model=Genre):
@@ -132,6 +172,7 @@ class ScoreAdmin(ModelView, model=Score):
     create_template = "ajax_create.html"
     edit_template = "ajax_edit.html"
     column_list = [
+        Score.cover,
         Score.id,
         Score.title,
         Score.author,
@@ -143,6 +184,9 @@ class ScoreAdmin(ModelView, model=Score):
         Score.is_published,
     ]
     column_searchable_list = [Score.title]
+    # Обложку показываем картинкой, а не путём к файлу.
+    column_formatters = {Score.cover: _image_formatter("cover")}
+    column_formatters_detail = {Score.cover: _image_formatter("cover", size=320)}
     column_sortable_list = [
         Score.id,
         Score.title,
@@ -177,6 +221,7 @@ class CollectionAdmin(ModelView, model=Collection):
     create_template = "ajax_create.html"
     edit_template = "ajax_edit.html"
     column_list = [
+        Collection.cover,
         Collection.id,
         Collection.title,
         Collection.is_featured,
@@ -184,6 +229,9 @@ class CollectionAdmin(ModelView, model=Collection):
         Collection.position,
     ]
     column_searchable_list = [Collection.title]
+    # Обложку подборки показываем картинкой, а не путём к файлу.
+    column_formatters = {Collection.cover: _image_formatter("cover")}
+    column_formatters_detail = {Collection.cover: _image_formatter("cover", size=320)}
     column_sortable_list = [Collection.id, Collection.title, Collection.position]
     # source* — служебные поля импорта, в форме не нужны. items — read-only
     # (упорядоченное чтение), ноты добавляются через поле scores ниже.
