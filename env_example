@@ -10,3 +10,14 @@ REDIS_URL=redis://redis:6379/0
 MEDIA_ROOT=/storage/out
 MEDIA_BASE_URL=http://localhost
 MEDIA_PATH_PREFIX=media
+
+# --- Каталог нот / админка ---
+POSTGRES_USER=catalog
+POSTGRES_PASSWORD=catalog
+POSTGRES_DB=catalog
+DATABASE_URL=postgresql+psycopg2://catalog:catalog@postgres:5432/catalog
+CATALOG_MEDIA_DIR=/storage/out/catalog
+# Логин в админку (/admin). Обязательно поменяйте в проде.
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=admin
+ADMIN_SECRET=change-me-in-production

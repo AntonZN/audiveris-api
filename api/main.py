@@ -4,10 +4,14 @@ from fastapi import FastAPI
 
 import threading
 
+from api.admin import init_admin
+from api.catalog_routes import router as catalog_router
 from api.cleanup import start_cleanup_loop
 from api.config import settings
+from api.db import init_db
 from api.repository import repo
 from api.routes import router
+from api.stats_routes import router as stats_router
 from api.worker import Worker, create_workers
 
 workers: list[Worker] = []
@@ -18,7 +22,8 @@ cleanup_thread: threading.Thread | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global workers, cleanup_thread
-    # Startup: requeue running tasks and start workers
+    # Startup: создать таблицы каталога, переочередить running-задачи, поднять воркеров
+    init_db()
     repo.requeue_running_tasks()
     workers = create_workers(settings.task_workers)
     if settings.task_ttl_seconds > 0 or settings.validate_ttl_seconds > 0:
@@ -60,3 +65,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(router)
+app.include_router(catalog_router)
+app.include_router(stats_router)
+
+# Админка каталога на /admin (своя session-аутентификация).
+init_admin(app)

@@ -1,0 +1,5 @@
+{% extends "sqladmin/create.html" %}
+{% block tail %}
+  {{ super() }}
+  {% include "_select2_open_all.html" %}
+{% endblock %}

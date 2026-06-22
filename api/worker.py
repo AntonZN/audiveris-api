@@ -6,6 +6,7 @@ from pathlib import Path
 from api.models import TaskStatus
 from api.repository import repo
 from api.services import audiveris_service
+from api.stats import record_processing
 
 
 class Worker:
@@ -44,6 +45,17 @@ class Worker:
                             "failed": max(1, progress.get("failed", 0)),
                         }
                         repo.save(task)
+                        record_processing(
+                            task_id=task_id,
+                            kind="playlist" if task.get("playlist") else "single",
+                            preset=task.get("preset"),
+                            status=TaskStatus.error.value,
+                            files_total=total,
+                            files_completed=completed,
+                            files_failed=max(1, progress.get("failed", 0)),
+                            enhance=bool(task.get("enhance")),
+                            analyze=bool(task.get("analyze")),
+                        )
 
     def _process_task(self, task_id: str) -> None:
         """Process a single task from the queue."""
@@ -107,6 +119,18 @@ class Worker:
             task["status"] = TaskStatus.error.value
 
         repo.save(task)
+
+        record_processing(
+            task_id=task_id,
+            kind="playlist" if playlist else "single",
+            preset=preset,
+            status=task["status"],
+            files_total=task["progress"]["total"],
+            files_completed=completed_count,
+            files_failed=failed_count,
+            enhance=bool(enhance),
+            analyze=bool(task.get("analyze")),
+        )
 
         shutil.rmtree(input_dir, ignore_errors=True)
 

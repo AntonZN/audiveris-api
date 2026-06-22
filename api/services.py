@@ -248,10 +248,10 @@ class AudiverisService:
     ) -> FileResult:
         """Process a single input file and return a FileResult.
 
-        Если на вход пришло ФОТО (JPEG/HEIC), распознаём через homr — он
-        устойчивее к перекосу/шуму/перспективе телефонных снимков. PNG/WebP/PDF
-        идут стандартным путём через Audiveris. Постобработка (analysis/bpm/texts +
-        проверка midi_ok) для обоих движков одна и та же.
+        Любое одиночное ИЗОБРАЖЕНИЕ (JPEG/HEIC/PNG/WebP) распознаём через homr —
+        он устойчивее к перекосу/шуму/перспективе. Только PDF идёт стандартным
+        путём через Audiveris. Постобработка (analysis/bpm/texts + проверка
+        midi_ok) для обоих движков одна и та же.
         """
         try:
             if settings.homr_enabled and is_photo(input_path):

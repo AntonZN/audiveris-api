@@ -44,8 +44,28 @@ async def _save_file(file: UploadFile, path: Path) -> None:
 
 
 def _get_pdf_page_count(path: Path) -> int:
-    """Получить количество страниц в PDF файле."""
+    """Получить количество страниц в PDF файле.
+
+    Многие PDF зашифрованы с пустым пользовательским паролем (только
+    ограничения прав) — pypdf расшифровывает их автоматически при наличии
+    пакета cryptography. PDF с реальным паролем отдаём как 400.
+    """
     reader = PdfReader(path)
+    if reader.is_encrypted:
+        try:
+            # Пустой пароль покрывает большинство «защищённых» PDF.
+            if reader.decrypt("") == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="PDF защищён паролем, обработка невозможна",
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail="Не удалось прочитать PDF (повреждён или защищён)",
+            )
     return len(reader.pages)
 
 
@@ -163,7 +183,13 @@ async def create_single_task(
         )
 
     if file_type == "pdf":
-        page_count = _get_pdf_page_count(input_path)
+        try:
+            page_count = _get_pdf_page_count(input_path)
+        except HTTPException:
+            input_path.unlink()
+            input_dir.rmdir()
+            output_dir.rmdir()
+            raise
         if page_count > 5:
             input_path.unlink()
             input_dir.rmdir()

@@ -5,6 +5,7 @@ watchfiles==0.24.0
 redis==5.0.8
 pydantic-settings==2.2.1
 pypdf==5.1.0
+cryptography==44.0.0  # нужна pypdf для расшифровки AES-зашифрованных PDF
 pillow==12.1.0
 music21==10.3.0
 numpy==2.4.6
@@ -14,6 +15,7 @@ verovio==6.2.1
 # тянет onnxruntime, rapidocr-onnxruntime, musicxml. Требует Python 3.10–3.12.
 homr==0.6.2
 sqlalchemy==2.0.36
+alembic==1.14.0
 psycopg2-binary==2.9.10
 sqladmin==0.20.1
 fastapi-storages==0.3.0

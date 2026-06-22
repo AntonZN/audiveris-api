@@ -1,0 +1,78 @@
+{% extends "sqladmin/layout.html" %}
+{% block content %}
+<style>
+  .omr-cards { display:flex; gap:1rem; flex-wrap:wrap; margin-bottom:1.25rem; }
+  .omr-card { flex:1; min-width:140px; border:1px solid #e6e7e9; border-radius:8px; padding:.75rem 1rem; background:#fff; }
+  .omr-card .v { font-size:1.6rem; font-weight:600; }
+  .omr-card .l { color:#6c757d; font-size:.8rem; text-transform:uppercase; letter-spacing:.03em; }
+  .omr-chart { display:flex; align-items:flex-end; gap:3px; height:220px; padding:8px;
+               border:1px solid #e6e7e9; border-radius:8px; background:#fff; overflow-x:auto; }
+  .omr-col { flex:1 0 10px; display:flex; flex-direction:column; align-items:center; height:100%; min-width:8px; }
+  .omr-track { flex:1; width:100%; display:flex; align-items:flex-end; }
+  .omr-bar { width:100%; display:flex; flex-direction:column; justify-content:flex-end; border-radius:3px 3px 0 0; overflow:hidden; }
+  .omr-seg-fail { background:#d63939; }
+  .omr-seg-ok { background:#2fb344; }
+  .omr-xlabel { font-size:.6rem; color:#6c757d; margin-top:4px; white-space:nowrap; transform:rotate(-60deg); height:14px; }
+  .omr-legend span { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; }
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="m-0">Статистика обработок OMR</h2>
+  <div>
+    <span class="text-muted me-2">Период:</span>
+    {% for d in [7, 30, 90] %}
+      <a class="btn btn-sm {% if days == d %}btn-primary{% else %}btn-outline-secondary{% endif %}" href="?days={{ d }}">{{ d }} дн.</a>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="omr-cards">
+  <div class="omr-card"><div class="v">{{ totals.tasks }}</div><div class="l">Обработок</div></div>
+  <div class="omr-card"><div class="v text-success">{{ totals.completed }}</div><div class="l">Успешно</div></div>
+  <div class="omr-card"><div class="v text-danger">{{ totals.failed }}</div><div class="l">С ошибкой</div></div>
+  <div class="omr-card"><div class="v">{{ totals.files }}</div><div class="l">Файлов обработано</div></div>
+</div>
+
+<div class="mb-2 omr-legend text-muted small">
+  <span style="background:#2fb344"></span>успешно
+  <span style="background:#d63939; margin-left:12px"></span>с ошибкой
+</div>
+
+<div class="omr-chart mb-4">
+  {% for s in series %}
+    <div class="omr-col" title="{{ s.date }} — обработок: {{ s.tasks }} (ok {{ s.completed }}, err {{ s.failed }}), файлов {{ s.files }}">
+      <div class="omr-track">
+        <div class="omr-bar" style="height: {{ (s.tasks / max_tasks * 100) | round(2) }}%">
+          {% if s.tasks %}
+            <div class="omr-seg-fail" style="height: {{ (s.failed / s.tasks * 100) | round(2) }}%"></div>
+            <div class="omr-seg-ok" style="height: {{ (s.completed / s.tasks * 100) | round(2) }}%"></div>
+          {% endif %}
+        </div>
+      </div>
+      {% if days <= 31 %}<div class="omr-xlabel">{{ s.date[5:] }}</div>{% endif %}
+    </div>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-vcenter table-striped">
+      <thead>
+        <tr><th>Дата</th><th class="text-end">Обработок</th><th class="text-end">Успешно</th>
+            <th class="text-end">С ошибкой</th><th class="text-end">Файлов</th></tr>
+      </thead>
+      <tbody>
+        {% for s in series | reverse %}
+          <tr>
+            <td>{{ s.date }}</td>
+            <td class="text-end">{{ s.tasks }}</td>
+            <td class="text-end text-success">{{ s.completed }}</td>
+            <td class="text-end text-danger">{{ s.failed }}</td>
+            <td class="text-end">{{ s.files }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

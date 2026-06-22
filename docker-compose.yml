@@ -1,14 +1,36 @@
 services:
+  # Одноразовый сервис миграций: гоняет `alembic upgrade head` и выходит.
+  # API стартует только после его успешного завершения (см. depends_on ниже).
+  migrate:
+    build:
+      context: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./api:/srv/api
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://catalog:catalog@postgres:5432/catalog}
+    command: ["alembic", "-c", "api/alembic.ini", "upgrade", "head"]
+    restart: "no"
+    networks:
+      - audiveris
+
   audiveris-api:
     build:
       context: .
     depends_on:
       redis:
         condition: service_started
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "8000"
     volumes:
       - ./api:/srv/api
+      - ./scripts:/srv/scripts
       - storage:/storage
     environment:
       DEBUG: ${DEBUG:-false}
@@ -28,8 +50,30 @@ services:
       IMAGE_UPSCALE_FACTOR: ${IMAGE_UPSCALE_FACTOR:-2.0}
       IMAGE_CONTRAST_FACTOR: ${IMAGE_CONTRAST_FACTOR:-1.2}
       IMAGE_SHARPNESS_FACTOR: ${IMAGE_SHARPNESS_FACTOR:-1.5}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://catalog:catalog@postgres:5432/catalog}
+      CATALOG_MEDIA_DIR: ${CATALOG_MEDIA_DIR:-/storage/out/catalog}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      ADMIN_SECRET: ${ADMIN_SECRET:-change-me-in-production}
     command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
+    networks:
+      - audiveris
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-catalog}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-catalog}
+      POSTGRES_DB: ${POSTGRES_DB:-catalog}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-catalog} -d ${POSTGRES_DB:-catalog}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
     networks:
       - audiveris
 
@@ -65,6 +109,7 @@ volumes:
   storage:
   caddy_data:
   caddy_config:
+  pgdata:
 
 networks:
   audiveris:

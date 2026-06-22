@@ -1,0 +1,27 @@
+<script type="text/javascript">
+  // По умолчанию SQLAdmin (main.js) инициализирует ajax-поля select2 с
+  // minimumInputLength: 1 — список появляется только после ввода. Переинициализируем
+  // их с minimumInputLength: 0, чтобы при клике сразу подгружались первые варианты
+  // (бэкенд при пустом term отдаёт первые `limit`, по умолчанию 10).
+  $(function () {
+    $(':input[data-role="select2-ajax"]').each(function () {
+      var $el = $(this);
+      if ($el.hasClass("select2-hidden-accessible")) {
+        $el.select2("destroy");
+      }
+      $el.select2({
+        minimumInputLength: 0,
+        allowClear: true,
+        placeholder: "",
+        ajax: {
+          url: $el.data("url"),
+          dataType: "json",
+          delay: 200,
+          data: function (params) {
+            return { name: $el.attr("name"), term: params.term || "" };
+          }
+        }
+      });
+    });
+  });
+</script>
