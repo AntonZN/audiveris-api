@@ -107,24 +107,30 @@ def _score_detail(s: Score) -> ScoreDetail:
 # --------------------------------------------------------------------------- #
 @router.get("/genres", response_model=list[TermOut], summary="Список жанров")
 def list_genres(db: Session = Depends(get_db)) -> list[TermOut]:
+    """Все жанры (id/name/slug), по алфавиту. Для фильтров каталога используйте
+    `slug` в `GET /catalog/scores?genre=<slug>`. Удобно для чипов/выпадашек."""
     rows = db.execute(select(Genre).order_by(Genre.name)).scalars().all()
     return [_term(r) for r in rows]
 
 
 @router.get("/styles", response_model=list[TermOut], summary="Список стилей")
 def list_styles(db: Session = Depends(get_db)) -> list[TermOut]:
+    """Все стили (id/name/slug). `slug` → фильтр `GET /catalog/scores?style=<slug>`."""
     rows = db.execute(select(Style).order_by(Style.name)).scalars().all()
     return [_term(r) for r in rows]
 
 
 @router.get("/instruments", response_model=list[TermOut], summary="Список инструментов")
 def list_instruments(db: Session = Depends(get_db)) -> list[TermOut]:
+    """Все инструменты (id/name/slug). `slug` → фильтр `?instrument=<slug>`."""
     rows = db.execute(select(Instrument).order_by(Instrument.name)).scalars().all()
     return [_term(r) for r in rows]
 
 
 @router.get("/authors", response_model=list[AuthorOut], summary="Список авторов")
 def list_authors(db: Session = Depends(get_db)) -> list[AuthorOut]:
+    """Все авторы с фото и годами жизни. `slug` → фильтр `?author=<slug>`;
+    `photoUrl` — абсолютная ссылка на портрет (может быть null)."""
     rows = db.execute(select(Author).order_by(Author.name)).scalars().all()
     return [_author_out(r) for r in rows]
 
@@ -137,6 +143,9 @@ def list_collections(
     featured: bool | None = Query(None, description="Только избранные (для главной)"),
     db: Session = Depends(get_db),
 ) -> list[CollectionListItem]:
+    """Опубликованные подборки (кураторские списки нот), в порядке `position`.
+    `?featured=true` — только избранные, для блока на главной. Возвращает краткие
+    карточки с `itemsCount`; за составом идите в `GET /catalog/collections/{slug}`."""
     stmt = select(Collection).where(Collection.is_published.is_(True))
     if featured is not None:
         stmt = stmt.where(Collection.is_featured.is_(featured))
@@ -162,6 +171,8 @@ def list_collections(
     summary="Подборка с нотами",
 )
 def get_collection(slug: str, db: Session = Depends(get_db)) -> CollectionDetail:
+    """Подборка по `slug` вместе с её нотами (`scores`, краткие карточки) в
+    заданном порядке. Только опубликованные ноты. 404, если подборки нет."""
     c = db.execute(
         select(Collection)
         .where(Collection.slug == slug, Collection.is_published.is_(True))
@@ -202,16 +213,42 @@ _SORTS = {
 
 @router.get("/scores", response_model=ScoreListResponse, summary="Каталог нот")
 def list_scores(
-    q: str | None = Query(None, description="Поиск по названию"),
-    genre: str | None = Query(None, description="slug жанра"),
-    style: str | None = Query(None, description="slug стиля"),
-    instrument: str | None = Query(None, description="slug инструмента"),
-    author: str | None = Query(None, description="slug автора"),
-    sort: str = Query("new", pattern="^(new|popular|rating)$"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    q: str | None = Query(None, description="Поиск по подстроке названия (регистронезависимо)"),
+    genre: str | None = Query(None, description="Фильтр по жанру — slug из GET /catalog/genres"),
+    style: str | None = Query(None, description="Фильтр по стилю — slug из GET /catalog/styles"),
+    instrument: str | None = Query(
+        None, description="Фильтр по инструменту — slug из GET /catalog/instruments"
+    ),
+    author: str | None = Query(None, description="Фильтр по автору — slug из GET /catalog/authors"),
+    sort: str = Query(
+        "new",
+        pattern="^(new|popular|rating)$",
+        description="Сортировка: new — новые (по умолчанию), popular — по проигрываниям, rating — по среднему рейтингу",
+    ),
+    page: int = Query(1, ge=1, description="Номер страницы, с 1"),
+    page_size: int = Query(20, ge=1, le=100, description="Размер страницы, 1..100 (по умолчанию 20)"),
     db: Session = Depends(get_db),
 ) -> ScoreListResponse:
+    """Главный метод каталога: опубликованные ноты с пагинацией, фильтрами,
+    поиском и сортировкой.
+
+    **Фильтры** (`q`, `genre`, `style`, `instrument`, `author`) **необязательны и
+    комбинируются по И** — например `?genre=lied&author=schubert&sort=popular`
+    вернёт песни Шуберта в жанре Lied, по популярности. Значения фильтров (кроме
+    `q`) — это `slug` из справочников: возьмите их из `GET /catalog/genres`,
+    `/styles`, `/instruments`, `/authors`. `q` ищет вхождение в названии.
+
+    **Пагинация.** Ответ: `{ items, total, page, pageSize }`. Всего страниц =
+    `ceil(total / pageSize)`; следующая есть, пока `page * pageSize < total`.
+
+    **Поля `items` — краткие** (обложка, автор-строка, формат, сложность, стиль,
+    агрегаты рейтинга/проигрываний). За полной карточкой, файлами (MusicXML/MIDI/
+    MP3/PDF) и списками жанров/инструментов идите в `GET /catalog/scores/{slug}`
+    по полю `slug` из элемента списка.
+
+    **Формат ответа** — camelCase (`coverUrl`, `ratingAvg`, `pageSize` …);
+    `*Url`-поля — абсолютные ссылки на медиа (можно подставлять в `src`).
+    """
     stmt = select(Score).where(Score.is_published.is_(True))
 
     if q:
@@ -252,6 +289,12 @@ def list_scores(
 
 @router.get("/scores/{slug}", response_model=ScoreDetail, summary="Карточка ноты")
 def get_score(slug: str, db: Session = Depends(get_db)) -> ScoreDetail:
+    """Полная карточка ноты по `slug`: описание, объект автора (`authorObj`),
+    жанры/инструменты и ссылки на файлы — `musicXmlUrl`, `midiUrl`, `audioUrl`,
+    `pdfUrl` (любая может быть null, если файл не привязан). 404, если нет ноты.
+
+    `slug` берётся из элемента списка `GET /catalog/scores`. Это «экран ноты»:
+    тут лежат медиа для плеера/просмотра, в отличие от краткой карточки списка."""
     s = db.execute(
         select(Score)
         .where(Score.slug == slug, Score.is_published.is_(True))
@@ -301,6 +344,10 @@ def register_play(
     db: Session = Depends(get_db),
     device_id: str | None = Header(None, alias="X-Device-Id"),
 ) -> ScoreStats:
+    """Засчитать одно проигрывание ноты (инкремент `playsCount`). Вызывайте при
+    старте воспроизведения. Заголовок `X-Device-Id` опционален: если передан —
+    проигрывание привязывается к пользователю устройства. Возвращает свежие
+    агрегаты (`ScoreStats`). Принимает числовой `score_id` (не slug)."""
     score = db.get(Score, score_id)
     if not score:
         raise HTTPException(status_code=404, detail="Score not found")
@@ -323,6 +370,10 @@ def rate_score(
     db: Session = Depends(get_db),
     device_id: str | None = Header(None, alias="X-Device-Id"),
 ) -> ScoreStats:
+    """Поставить/изменить оценку ноты (1..5). Тело: `{ "value": 1..5 }`.
+    Заголовок `X-Device-Id` **обязателен** (иначе 400) — оценка одна на
+    устройство, повторный вызов перезаписывает прежнюю. В ответе пересчитанные
+    `ratingAvg`/`ratingCount` и `myRating`. Принимает числовой `score_id`."""
     if not device_id:
         raise HTTPException(status_code=400, detail="X-Device-Id header is required")
 
