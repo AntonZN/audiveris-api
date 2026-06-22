@@ -55,7 +55,9 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       ADMIN_SECRET: ${ADMIN_SECRET:-change-me-in-production}
-    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    # --proxy-headers + --forwarded-allow-ips=*: доверять X-Forwarded-Proto от
+    # Caddy (он в docker-сети, не 127.0.0.1), иначе https-схема теряется.
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--proxy-headers", "--forwarded-allow-ips=*"]
 
     networks:
       - audiveris
