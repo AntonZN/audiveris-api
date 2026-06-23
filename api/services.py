@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import shutil
 import signal
 import subprocess
 import time
@@ -256,10 +257,21 @@ class AudiverisService:
         try:
             if settings.homr_enabled and is_photo(input_path):
                 output_path, log_path = homr_service.run(input_path, output_dir)
-            else:
-                output_path, log_path, interline = self._run_audiveris(
-                    input_path, output_dir, preset, enhance
-                )
+                result = self._build_success_result(output_path, log_path)
+                # homr слабо распознаёт темп: если BPM не нашёлся — добираем его
+                # через Audiveris (он надёжнее) и вписываем и в файл, и в API-поле.
+                if result.bpm is None and settings.audiveris_bpm_fallback:
+                    bpm = self._extract_bpm_via_audiveris(input_path, output_dir)
+                    if bpm is not None:
+                        from api.analysis import inject_bpm
+
+                        inject_bpm(output_path, bpm)  # в отдаваемый файл (best-effort)
+                        result.bpm = bpm              # в ответ API — в любом случае
+                return result
+
+            output_path, log_path, interline = self._run_audiveris(
+                input_path, output_dir, preset, enhance
+            )
             return self._build_success_result(output_path, log_path)
         except LowInterlineError as exc:
             return FileResult(
@@ -273,6 +285,53 @@ class AudiverisService:
                 error=exc.message,
                 log_url=self._build_media_url(exc.log_path) if exc.log_path else None,
             )
+
+    def _extract_bpm_via_audiveris(self, input_path: Path, output_dir: Path) -> int | None:
+        """Best-effort: достать BPM фото через Audiveris, когда homr темп не нашёл.
+
+        Гоняем Audiveris на ИСХОДНОМ снимке во временный подкаталог и читаем темп
+        из его MusicXML. Намеренно НЕ препроцессим (upscale размывает мелкие цифры
+        темпа и ломает их OCR — см. image_min_dimension в config). Любая ошибка
+        или таймаут → None: проба не должна валить уже успешную задачу.
+        """
+        from api.analysis import collect_bpm
+
+        probe_dir = output_dir / ".bpm_probe"
+        try:
+            shutil.rmtree(probe_dir, ignore_errors=True)
+            probe_dir.mkdir(parents=True, exist_ok=True)
+
+            # Копируем вход, чтобы не трогать оригинал; WebP -> JPG (Audiveris его
+            # не читает). _preprocess_image сознательно не вызываем.
+            probe_input = probe_dir / input_path.name
+            shutil.copyfile(input_path, probe_input)
+            probe_input = self._convert_webp_to_jpg(probe_input)
+
+            cmd = [
+                settings.audiveris_cmd,
+                "-batch",
+                "-constant",
+                f"org.audiveris.omr.sheet.ScaleBuilder.minInterline={settings.min_interline}",
+                *self._NO_MOVEMENT_SPLIT,
+                "-transcribe",
+                "-export",
+                "-output", str(probe_dir),
+                str(probe_input),
+            ]
+            result = self._run_command(cmd, probe_dir, self._timeout_for_single())
+            if result.returncode != 0:
+                return None
+            candidates = self._find_outputs(probe_dir)
+            if not candidates:
+                return None
+            return collect_bpm(sorted(candidates)[0])
+        except ProcessingError:
+            return None  # таймаут Audiveris (_run_command)
+        except Exception:
+            logger.exception("audiveris bpm probe failed for %s", input_path)
+            return None
+        finally:
+            shutil.rmtree(probe_dir, ignore_errors=True)
 
     def process_playlist(
         self,

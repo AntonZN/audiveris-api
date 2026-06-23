@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     # не жил в памяти веб-воркера.
     homr_enabled: bool = True
     homr_timeout_seconds: int = 180
+    # homr слабо распознаёт темп. Если на фото BPM не нашёлся, дополнительно
+    # прогоняем снимок через Audiveris (он надёжнее достаёт темп) и вписываем
+    # найденное значение в результат — и в отдаваемый файл, и в API-поле bpm.
+    audiveris_bpm_fallback: bool = True
 
     # --- Каталог нот / админка ---
     # Postgres. Внутри docker-compose host = "postgres".

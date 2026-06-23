@@ -245,6 +245,125 @@ def collect_bpm(path: Path) -> int | None:
     return None
 
 
+def _find_mxl_rootfile(entries: "list[tuple[zipfile.ZipInfo, bytes]]") -> str | None:
+    """Имя rootfile внутри .mxl: через META-INF/container.xml, иначе первый
+    .xml/.musicxml вне META-INF."""
+    for zi, data in entries:
+        if zi.filename == "META-INF/container.xml":
+            try:
+                container = ET.fromstring(data)
+                for el in container.iter():
+                    if el.tag.split("}", 1)[-1] == "rootfile" and el.attrib.get("full-path"):
+                        return el.attrib["full-path"]
+            except Exception:
+                logger.exception("mxl: failed to parse container.xml")
+            break
+    for zi, _ in entries:
+        low = zi.filename.lower()
+        if (low.endswith(".xml") or low.endswith(".musicxml")) and not zi.filename.startswith("META-INF"):
+            return zi.filename
+    return None
+
+
+def _add_tempo_to_root(root, bpm: int) -> bool:
+    """In-place: вставить темп (<metronome> + <sound tempo>) в начало первого
+    такта первой партии. False, если структуры нет или темп уже присутствует
+    (идемпотентно — не дублируем)."""
+    if root.find(".//sound[@tempo]") is not None or root.find(".//per-minute") is not None:
+        return False
+    part = root.find("part")
+    if part is None:
+        return False
+    measure = part.find("measure")
+    if measure is None:
+        return False
+
+    direction = ET.Element("direction", {"placement": "above"})
+    dtype = ET.SubElement(direction, "direction-type")
+    metronome = ET.SubElement(dtype, "metronome")
+    ET.SubElement(metronome, "beat-unit").text = "quarter"
+    ET.SubElement(metronome, "per-minute").text = str(bpm)
+    ET.SubElement(direction, "sound", {"tempo": str(bpm)})
+
+    # По схеме MusicXML <direction> идёт после <attributes>, если он есть в такте.
+    insert_at = 0
+    for i, child in enumerate(list(measure)):
+        if child.tag == "attributes":
+            insert_at = i + 1
+            break
+    measure.insert(insert_at, direction)
+    return True
+
+
+def inject_bpm(path: Path, bpm: int) -> bool:
+    """Вписать темп в MusicXML: `<metronome>` + `<sound tempo="N"/>` в первый такт.
+
+    Нужно, когда движок (homr) темп не распознал, а мы достали BPM иначе (через
+    Audiveris): значение попадает и в отдаваемый файл (его читает плеер), и снова
+    становится доступно через `collect_bpm`. Работает на .mxl и .musicxml/.xml.
+    Идемпотентно. Возвращает True, если файл изменён.
+    """
+    if path.suffix.lower() == ".mxl":
+        return _inject_bpm_mxl(path, bpm)
+    return _inject_bpm_plain(path, bpm)
+
+
+def _inject_bpm_plain(path: Path, bpm: int) -> bool:
+    try:
+        tree = ET.parse(str(path))
+    except Exception:
+        logger.exception("bpm inject: failed to parse %s", path)
+        return False
+    if not _add_tempo_to_root(tree.getroot(), bpm):
+        return False
+    try:
+        tree.write(str(path), encoding="utf-8", xml_declaration=True)
+        return True
+    except Exception:
+        logger.exception("bpm inject: failed to write %s", path)
+        return False
+
+
+def _inject_bpm_mxl(path: Path, bpm: int) -> bool:
+    """Распаковать .mxl, добавить темп в rootfile, перепаковать (если изменили)."""
+    try:
+        with zipfile.ZipFile(path, "r") as zin:
+            entries = [(zi, zin.read(zi.filename)) for zi in zin.infolist()]
+    except Exception:
+        logger.exception("bpm inject: failed to read %s", path)
+        return False
+
+    rootfile_name = _find_mxl_rootfile(entries)
+    if rootfile_name is None:
+        logger.warning("bpm inject: no rootfile found in %s", path)
+        return False
+
+    changed = False
+    new_entries: list[tuple[zipfile.ZipInfo, bytes]] = []
+    for zi, data in entries:
+        if zi.filename == rootfile_name:
+            try:
+                root = ET.fromstring(data)
+            except Exception:
+                logger.exception("bpm inject: failed to parse %s in %s", rootfile_name, path)
+                return False
+            if _add_tempo_to_root(root, bpm):
+                changed = True
+                data = b'<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="utf-8")
+        new_entries.append((zi, data))
+
+    if not changed:
+        return False
+    try:
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zout:
+            for zi, data in new_entries:
+                zout.writestr(zi.filename, data)
+        return True
+    except Exception:
+        logger.exception("bpm inject: failed to write %s", path)
+        return False
+
+
 def collect_texts(path: Path) -> dict:
     """Собрать ВСЕ текстовые сущности из MusicXML (без стрипа).
 
