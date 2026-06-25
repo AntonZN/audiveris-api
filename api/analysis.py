@@ -529,7 +529,7 @@ def _scrub_root(root) -> None:
                     for sub in list(child):
                         child.remove(sub)
         _sanitize_divisions(root)
-        # _sanitize_clefs(root)
+        _sanitize_clefs(root)
     except Exception:
         logger.exception("xml strip: scrub failed")
 

@@ -82,7 +82,7 @@ class FileResult(ApiModel):
     url: str | None = Field(default=None, description="Ссылка для скачивания")
     error: str | None = Field(default=None, description="Сообщение об ошибке")
     log_url: str | None = Field(default=None, description="Ссылка на лог Audiveris")
-    fixed: bool = Field(default=False, description="Был ли файл прогнан через music21 round-trip (сейчас — всегда true при успехе)")
+    fixed: bool = Field(default=False, description="Был ли файл прогнан через music21 round-trip (true только если выход Audiveris не собирался в MIDI и его пришлось чинить)")
     bpm: int | None = Field(default=None, description="Темп начала песни (целое число BPM). None — Audiveris BPM не нашёл.")
     analysis: ScoreAnalysis | None = Field(default=None, description="Метаданные партитуры от music21 (тональность, размеры, список темпов, инструменты…)")
     texts: ScoreTexts | None = Field(default=None, description="Распознанные тексты, собранные ДО стрипа из XML. Мобила сама показывает их над плеером.")

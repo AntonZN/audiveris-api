@@ -179,17 +179,22 @@ class AudiverisService:
     ) -> FileResult:
         """Build a FileResult from a produced output file.
 
-        ТЕСТОВАЯ политика (без music21-фикса):
+        Политика «fix-on-failure» (фикс — только когда без него файл непригоден):
           1) `collect_bpm` + `collect_texts` — выдёргиваем темп и распознанный
              текст из сырого .mxl ДО стрипа (мобиле они нужны как метаданные,
              а в xml-плеере всё равно не рисуются);
-          2) `_strip_text_xml` — выкидываем текст и утечки путей (.mxl на месте);
+          2) `_strip_text_xml` — выкидываем текст и утечки путей плюс чиним
+             структурные дефекты XML, на которых спотыкаются music21/verovio:
+             <divisions>0</divisions> и клефы с <line> вне [1..5] (это и есть
+             «line number must be 1-5» / «Could not find clef C-1»). .mxl на месте;
           3) `analyze_only` — music21 ТОЛЬКО парсит и считает analysis
-             (тональность/размеры/темпы/инструменты), модель НЕ пересобираем
-             и `_fixed.musicxml` НЕ пишем;
-          4) `verovio_check.midi_ok` — проверяем прямо выход Audiveris: если он
-             не собирается в MIDI, отдавать его бессмысленно (приложение всё равно
-             не воспроизведёт), поднимаем ProcessingError.
+             (тональность/размеры/темпы/инструменты);
+          4) `verovio_check.midi_ok` — сначала проверяем прямо выход Audiveris
+             (быстрый путь: на здоровых файлах тяжёлый round-trip не нужен). Если
+             он НЕ собирается в MIDI, пробуем `repair` (music21 round-trip: parse →
+             strip → rewrite, убирает beam-on-chord и пр.) и проверяем ещё раз.
+             Получилось — отдаём починенный файл (`fixed=True`); не помогло —
+             ProcessingError.
         """
         from api.analysis import _strip_text_xml, analyze_only, collect_bpm, collect_texts
         from api.models import ScoreTexts
@@ -218,23 +223,42 @@ class AudiverisService:
             logger.exception("music21 analysis failed for %s", output_path)
 
         # verovio renderToMIDI — это «контракт» с мобильным клиентом: ровно тот же
-        # вызов, что у него внутри. Проверяем СРАЗУ то, что отдал Audiveris (без
-        # music21-фикса). Если файл его не проходит — отдавать смысла нет, иначе
-        # приложение попытается воспроизвести и упадёт.
+        # вызов, что у него внутри. Проверяем СРАЗУ то, что отдал Audiveris —
+        # на здоровых файлах music21-round-trip не нужен, не тратим его.
         from api.verovio_check import midi_ok
 
-        if not midi_ok(output_path):
-            detail = (
-                "Не удалось получить валидный MusicXML: выход Audiveris не "
-                "рендерится в MIDI через verovio"
-            )
-            raise ProcessingError(detail, log_path=log_path)
+        result_path = output_path
+        fixed = False
+
+        if not midi_ok(result_path):
+            # Выход не собирается в MIDI (частые причины: <beam> на ноте-члене
+            # аккорда → segfault verovio, разбалансированные лиги, остаточные
+            # клеф/divisions-дефекты). Пробуем ПОЧИНИТЬ прогоном через music21
+            # (repair: parse → strip → rewrite, см. analysis.repair) и проверяем
+            # ещё раз — fallback, тяжёлый round-trip только когда без него никак.
+            from api.analysis import repair
+
+            fixed_path = None
+            try:
+                fixed_path = repair(output_path)
+            except Exception:
+                logger.exception("music21 repair failed for %s", output_path)
+
+            if fixed_path is not None and midi_ok(fixed_path):
+                result_path = fixed_path
+                fixed = True
+            else:
+                detail = (
+                    "Не удалось получить валидный MusicXML: выход Audiveris не "
+                    "рендерится в MIDI через verovio даже после music21-фикса"
+                )
+                raise ProcessingError(detail, log_path=log_path)
 
         return FileResult(
-            filename=output_path.name,
-            url=self._build_media_url(output_path),
+            filename=result_path.name,
+            url=self._build_media_url(result_path),
             log_url=self._build_media_url(log_path) if log_path else None,
-            fixed=False,
+            fixed=fixed,
             bpm=bpm,
             analysis=analysis,
             texts=texts,
@@ -340,8 +364,33 @@ class AudiverisService:
         preset: str = "default",
         enhance: bool = False,
     ) -> FileResult:
-        """Process multiple files as a playlist (single book) and return a FileResult."""
+        """Process multiple files as a playlist (one song across pages).
+
+        Если все входы — ФОТО и включён homr: каждое фото распознаём homr'ом
+        отдельно (он устойчивее к перекосу/шуму/перспективе), затем склеиваем
+        постранично через relieur (см. _run_homr_playlist). Иначе (PDF в
+        плейлисте или homr выключен) — прежний путь через Audiveris compound book.
+        Постобработка (analysis/bpm/texts + midi_ok + repair) для обоих одна.
+        """
         try:
+            if (
+                settings.homr_enabled
+                and input_paths
+                and all(is_photo(p) for p in input_paths)
+            ):
+                output_path, log_path = self._run_homr_playlist(input_paths, output_dir)
+                result = self._build_success_result(output_path, log_path)
+                # homr слабо распознаёт темп — добираем его Audiveris'ом по первой
+                # странице (как в single) и вписываем и в файл, и в ответ API.
+                if result.bpm is None and settings.audiveris_bpm_fallback:
+                    bpm = self._extract_bpm_via_audiveris(input_paths[0], output_dir)
+                    if bpm is not None:
+                        from api.analysis import inject_bpm
+
+                        inject_bpm(output_path, bpm)
+                        result.bpm = bpm
+                return result
+
             output_path, log_path, interline = self._run_audiveris_playlist(
                 input_paths, output_dir, preset, enhance
             )
@@ -358,6 +407,44 @@ class AudiverisService:
                 error=exc.message,
                 log_url=self._build_media_url(exc.log_path) if exc.log_path else None,
             )
+
+    def _run_homr_playlist(
+        self, input_paths: list[Path], output_dir: Path
+    ) -> tuple[Path, Path | None]:
+        """Распознать каждое фото плейлиста через homr и склеить в одну партитуру.
+
+        Каждое фото → homr → .mxl (тот же путь, что и single), в свой подкаталог
+        .page{i} ради раздельных логов и чтобы .mxl не перетирали друг друга.
+        Затем relieur.merge_musicxml дописывает такты каждой следующей страницы в
+        хвост соответствующей партии первой, сквозным образом перенумеровывает
+        такты и снимает повторную декларацию key/clef/divisions на стыке страниц.
+
+        Сбой homr на ЛЮБОЙ странице (ProcessingError из homr_service.run) и любая
+        ошибка склейки роняют всю задачу — отдавать песню с дырой посередине
+        бессмысленно.
+
+        Returns:
+            (merged_path, log_path) — склеенный .musicxml и лог последней страницы.
+        """
+        from api.relieur import merge_musicxml
+
+        page_mxls: list[Path] = []
+        last_log: Path | None = None
+        for i, input_path in enumerate(input_paths):
+            mxl_path, log_path = homr_service.run(input_path, output_dir / f".page{i}")
+            page_mxls.append(mxl_path)
+            last_log = log_path
+
+        merged_path = output_dir / "playlist.musicxml"
+        try:
+            merge_musicxml(page_mxls, merged_path)
+        except Exception as exc:
+            logger.exception("relieur merge failed for playlist in %s", output_dir)
+            raise ProcessingError(
+                f"Не удалось склеить страницы плейлиста: {exc}",
+                log_path=last_log,
+            ) from exc
+        return merged_path, last_log
 
     # Audiveris ловит «новый movement» по indented system'у (см. SystemManager.java).
     # На фотках/скриншотах одной песни это даёт false positive: если на каком-то
