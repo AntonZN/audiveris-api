@@ -222,6 +222,22 @@ class AudiverisService:
         except Exception:
             logger.exception("music21 analysis failed for %s", output_path)
 
+        # Гейт «пустого» результата: мусорный вход (скриншот, фото без нот) homr/
+        # Audiveris «успешно» превращают в почти пустую партитуру. Если нот меньше
+        # порога — это не успех, а провал распознавания: роняем задачу с ошибкой,
+        # чтобы файл ушёл в архив провалов, а не отдался клиентом как completed с
+        # пустым .mxl. Порог 0 отключает проверку. analysis=None (music21 не смог
+        # распарсить) НЕ трогаем — там своё поведение, гейт только по факту 0..N нот.
+        if settings.min_recognized_notes > 0 and analysis is not None:
+            notes = int(analysis.get("notes") or 0)
+            if notes < settings.min_recognized_notes:
+                detail = (
+                    f"Распознавание не нашло музыки: {notes} нот в выходе "
+                    f"(порог {settings.min_recognized_notes}). Похоже, на входе "
+                    "не партитура (скриншот/фото без нот) или качество слишком низкое."
+                )
+                raise ProcessingError(detail, log_path=log_path)
+
         # verovio renderToMIDI — это «контракт» с мобильным клиентом: ровно тот же
         # вызов, что у него внутри. Проверяем СРАЗУ то, что отдал Audiveris —
         # на здоровых файлах music21-round-trip не нужен, не тратим его.
