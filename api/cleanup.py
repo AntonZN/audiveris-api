@@ -37,7 +37,12 @@ def cleanup_storage() -> None:
     # Медиа каталога живут в catalog_media_dir (обычно /storage/out/catalog,
     # т.е. прямым потомком output_dir) и НЕ являются временными выходами OMR —
     # их нельзя удалять по TTL задач, иначе чистка снесёт весь каталог.
-    protected = {Path(settings.catalog_media_dir).resolve()}
+    # failures_dir (архив проваленных входов для аудита) тоже прямой потомок
+    # output_dir и живёт постоянно — чистит его только админ вручную.
+    protected = {
+        Path(settings.catalog_media_dir).resolve(),
+        Path(settings.failures_dir).resolve(),
+    }
 
     if settings.task_ttl_seconds > 0:
         cutoff_ts = now - settings.task_ttl_seconds

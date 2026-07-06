@@ -16,6 +16,7 @@ from api.db import Base
 # Регистрируем модели в Base.metadata (нужно для --autogenerate).
 from api import catalog_models  # noqa: F401,E402
 from api import stats_models  # noqa: F401,E402
+from api import failures_models  # noqa: F401,E402
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

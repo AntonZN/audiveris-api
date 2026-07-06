@@ -3,6 +3,7 @@ import threading
 import traceback
 from pathlib import Path
 
+from api.failures import record_failure
 from api.models import TaskStatus
 from api.repository import repo
 from api.services import audiveris_service
@@ -34,8 +35,9 @@ class Worker:
                 except Exception:
                     task = repo.get(task_id)
                     if task:
+                        error_text = traceback.format_exc()
                         task["status"] = TaskStatus.error.value
-                        task["errors"] = traceback.format_exc()
+                        task["errors"] = error_text
                         progress = task.get("progress") or {}
                         total = progress.get("total", 1)
                         completed = progress.get("completed", 0)
@@ -56,6 +58,9 @@ class Worker:
                             enhance=bool(task.get("enhance")),
                             analyze=bool(task.get("analyze")),
                         )
+                        # Неожиданный сбой воркера: тоже архивируем входы для аудита,
+                        # прежде чем input_dir будет удалён (в т.ч. cleanup'ом по TTL).
+                        self._archive_failure(task, error_text)
 
     def _process_task(self, task_id: str) -> None:
         """Process a single task from the queue."""
@@ -132,7 +137,33 @@ class Worker:
             analyze=bool(task.get("analyze")),
         )
 
+        # Провал: не удаляем входы молча — копируем их в архив провалов и заводим
+        # строки в failed_files для последующего аудита (см. api/failures.py).
+        if failed_count > 0:
+            record_failure(
+                task_id=task_id,
+                kind="playlist" if playlist else "single",
+                preset=preset,
+                enhance=bool(enhance),
+                input_paths=input_paths,
+                error=errors,
+            )
+
         shutil.rmtree(input_dir, ignore_errors=True)
+
+    def _archive_failure(self, task: dict, error: str) -> None:
+        """Заархивировать входы задачи при неожиданном сбое воркера (см. _run)."""
+        input_dir = Path(task.get("input_dir", ""))
+        input_files = task.get("input_files", [])
+        input_paths = [input_dir / fname for fname in input_files]
+        record_failure(
+            task_id=task.get("id") or task.get("task_id"),
+            kind="playlist" if task.get("playlist") else "single",
+            preset=task.get("preset"),
+            enhance=bool(task.get("enhance")),
+            input_paths=input_paths,
+            error=error,
+        )
 
 
 def create_workers(count: int) -> list[Worker]:

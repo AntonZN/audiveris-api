@@ -57,6 +57,14 @@ class Settings(BaseSettings):
     # (обложки, musicxml, midi, mp3, pdf). Лежит внутри media_root, чтобы её
     # раздавал тот же /media/* (Caddy -> /storage/out).
     catalog_media_dir: str = "/storage/out/catalog"
+
+    # Директория «архива провалов»: входные файлы задач, которые не удалось
+    # обработать, НЕ удаляются вместе с временным input_dir, а копируются сюда и
+    # заводятся строкой в таблице failed_files (см. api/failures.py) — чтобы позже
+    # провести аудит «с какими файлами мы работаем плохо» в админке. Лежит внутри
+    # media_root (/storage/out), чтобы файлы отдавал тот же /media/* и в админке
+    # было превью/скачивание. cleanup её НЕ трогает (см. api/cleanup.py).
+    failures_dir: str = "/storage/out/failures"
     # Логин в админку SQLAdmin (одна учётка).
     admin_username: str = "admin"
     admin_password: str = "admin"

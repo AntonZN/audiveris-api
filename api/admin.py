@@ -56,9 +56,10 @@ from api.catalog_models import (
 )
 from api.config import settings
 from api.stats_models import ProcessingEvent
+from api.failures_models import FailedFile
 from api.db import engine
 
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from markupsafe import Markup
 
@@ -94,6 +95,56 @@ def _image_formatter(attr_name: str, size: int = 60):
         )
 
     return _fmt
+
+
+# Расширения, которые в архиве провалов имеет смысл показывать превьюшкой.
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
+
+
+def _failure_src(stored_path: str | None) -> str | None:
+    """Root-relative URL сохранённой копии проваленного файла (без хоста/схемы).
+
+    stored_path — абсолютный путь внутри media_root; отдаём путь под /media/*,
+    чтобы <img>/<a> в админке наследовали https страницы (mixed-content нет)."""
+    if not stored_path:
+        return None
+    try:
+        rel = Path(stored_path).relative_to(Path(settings.media_root))
+    except ValueError:
+        return None
+    prefix = settings.media_path_prefix.strip("/")
+    rel_q = quote(rel.as_posix())
+    return f"/{prefix}/{rel_q}" if prefix else f"/{rel_q}"
+
+
+def _failure_file_formatter(model, attribute):
+    """Колонка файла в архиве провалов: превью (для картинок) + ссылка «скачать»."""
+    src = _failure_src(getattr(model, "stored_path", None))
+    if not src:
+        return Markup('<span style="color:#9ca3af;">нет файла</span>')
+    name = getattr(model, "filename", "") or "файл"
+    ext = Path(name).suffix.lower()
+    if ext in _IMAGE_EXTS:
+        thumb = (
+            f'<img src="{src}" alt="" loading="lazy" '
+            'style="height:60px;width:auto;max-width:120px;object-fit:contain;'
+            'border-radius:4px;background:#f3f4f6;">'
+        )
+    else:
+        thumb = f'<span style="font-family:monospace;">{ext or "?"}</span>'
+    return Markup(
+        f'<a href="{src}" target="_blank" rel="noopener" '
+        f'title="Скачать {name}">{thumb}</a>'
+    )
+
+
+def _error_short_formatter(model, attribute):
+    """Короткий превью текста ошибки (полный виден в детальной карточке)."""
+    text = getattr(model, "error", None) or ""
+    text = text.strip().replace("\n", " ")
+    if len(text) > 160:
+        text = text[:160] + "…"
+    return text or "—"
 
 
 class AdminAuth(AuthenticationBackend):
@@ -326,6 +377,70 @@ class ProcessingEventAdmin(_ReadOnly, model=ProcessingEvent):
     column_default_sort = ("created_at", True)
 
 
+class FailedFileAdmin(ModelView, model=FailedFile):
+    name = "Проблемный файл"
+    name_plural = "Проблемные файлы"
+    category = "Активность"
+    icon = "fa-solid fa-file-circle-exclamation"
+    # Записи создаёт воркер; руками их не заводят. Редактируем только флаг
+    # «разобрано», а удаляем — чтобы после аудита выкинуть и строку, и файл.
+    can_create = False
+    can_edit = True
+    can_delete = True
+    can_view_details = True
+    # stored_path показываем превьюшкой/ссылкой (форматтер), error — коротким
+    # текстом; реальные колонки, чтобы SQLAdmin корректно их разрешал.
+    column_list = [
+        FailedFile.stored_path,
+        FailedFile.id,
+        FailedFile.created_at,
+        FailedFile.kind,
+        FailedFile.filename,
+        FailedFile.preset,
+        FailedFile.enhance,
+        FailedFile.reviewed,
+        FailedFile.error,
+        FailedFile.task_id,
+    ]
+    column_labels = {
+        FailedFile.stored_path: "Файл",
+        FailedFile.created_at: "Когда",
+        FailedFile.kind: "Тип",
+        FailedFile.filename: "Имя файла",
+        FailedFile.preset: "Пресет",
+        FailedFile.enhance: "enhance",
+        FailedFile.reviewed: "Разобрано",
+        FailedFile.task_id: "Задача",
+        FailedFile.error: "Ошибка",
+    }
+    column_searchable_list = [FailedFile.task_id, FailedFile.filename]
+    column_sortable_list = [
+        FailedFile.id,
+        FailedFile.created_at,
+        FailedFile.kind,
+        FailedFile.reviewed,
+    ]
+    column_default_sort = ("created_at", True)
+    # В форме правки — только флаг «разобрано» (остальное иммутабельно).
+    form_columns = [FailedFile.reviewed]
+    column_formatters = {
+        FailedFile.stored_path: _failure_file_formatter,
+        FailedFile.error: _error_short_formatter,
+    }
+    column_formatters_detail = {
+        FailedFile.stored_path: _failure_file_formatter,
+    }
+
+    async def on_model_delete(self, model, request: Request) -> None:
+        """Удаляя строку, убираем и сохранённую копию файла с диска."""
+        stored_path = getattr(model, "stored_path", None)
+        if stored_path:
+            try:
+                Path(stored_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 class OmrDashboardView(BaseView):
     name = "Дашборд OMR"
     icon = "fa-solid fa-chart-column"
@@ -407,6 +522,7 @@ def init_admin(app: FastAPI) -> Admin:
         RatingAdmin,
         PlayEventAdmin,
         ProcessingEventAdmin,
+        FailedFileAdmin,
         OmrDashboardView,
     ):
         admin.add_view(view)
