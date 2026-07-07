@@ -24,6 +24,9 @@ from api.exceptions import ProcessingError
 
 logger = logging.getLogger(__name__)
 
+# Раннер homr с монкипатчем от краша на вырожденном стане (см. api/homr_patch.py).
+_HOMR_RUNNER = Path(__file__).parent / "homr_patch.py"
+
 # Magic bytes растровых форматов, которые в /single уходят в homr.
 _MAGIC_JPEG = b"\xff\xd8\xff"
 _MAGIC_PNG = b"\x89PNG\r\n\x1a\n"
@@ -135,7 +138,10 @@ class HomrService:
 
         # homr — обычная зависимость в этом же venv; зовём его тем же интерпретатором.
         # homr пишет <stem>.musicxml рядом с переданным (абсолютным) путём к картинке.
-        cmd = [sys.executable, "-m", "homr.main", str(work_img)]
+        # Через homr_patch.py: он монкипатчит краш homr на вырожденном стане
+        # (cv2.resize с нулевым размером канвы) и делегирует в homr.main. Запуск по
+        # АБСОЛЮТНОМУ пути — не зависим от CWD подпроцесса.
+        cmd = [sys.executable, str(_HOMR_RUNNER), str(work_img)]
         timeout = max(settings.homr_timeout_seconds, 1)
 
         result = self._run_command(cmd, timeout, output_dir)

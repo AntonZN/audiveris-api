@@ -160,6 +160,55 @@ class AudiverisService:
 
         return input_path
 
+    def _pdf_render_dpi(self, pdf_path: Path) -> int | None:
+        """Безопасный DPI рендера PDF, чтобы самая большая страница уложилась в
+        pdf_max_pixels (иначе Audiveris отбросит лист как «Too large image» и не
+        создаст ни одной партитуры). None → PDF влезает на полном pdf_render_dpi
+        (или не удалось прочитать) — оставляем дефолт Audiveris.
+
+        Пиксели листа при DPI d = (w_pt·d/72)·(h_pt·d/72) = w_pt·h_pt·(d/72)².
+        Отсюда «влезающий» DPI = 72·sqrt(budget / (w_pt·h_pt)).
+        """
+        import math
+
+        from pypdf import PdfReader
+
+        try:
+            reader = PdfReader(str(pdf_path))
+            max_pts2 = 0.0
+            for page in reader.pages:
+                box = page.mediabox
+                max_pts2 = max(max_pts2, float(box.width) * float(box.height))
+            if max_pts2 <= 0:
+                return None
+            fitting = 72.0 * math.sqrt(settings.pdf_max_pixels / max_pts2)
+            if fitting >= settings.pdf_render_dpi:
+                return None  # влезает на полном DPI — ничего не навязываем
+            return max(1, int(fitting))
+        except Exception:
+            logger.exception("failed to compute safe pdf dpi for %s", pdf_path)
+            return None
+
+    def _pdf_resolution_args(self, paths: list[Path]) -> list[str]:
+        """`-constant`-аргументы, ограничивающие DPI рендера PDF среди входов.
+
+        Берём минимальный безопасный DPI по всем PDF-входам (картинки игнорируем —
+        их Audiveris рендерит как есть). Пусто, если ни одному PDF ограничение не
+        нужно."""
+        dpis = [
+            d
+            for p in paths
+            if p.suffix.lower() == ".pdf"
+            for d in (self._pdf_render_dpi(p),)
+            if d is not None
+        ]
+        if not dpis:
+            return []
+        return [
+            "-constant",
+            f"org.audiveris.omr.image.ImageLoading.pdfResolution={min(dpis)}",
+        ]
+
     def _prepare_input(self, input_path: Path, enhance: bool) -> Path:
         """Prepare an input image for Audiveris.
 
@@ -488,10 +537,15 @@ class AudiverisService:
         is_pdf = input_path.suffix.lower() == ".pdf"
         movement_args = [] if is_pdf else self._NO_MOVEMENT_SPLIT
 
+        # PDF: ограничиваем DPI рендера, чтобы страница не превысила лимит Audiveris
+        # (иначе «Too large image» → пустой результат). Для не-PDF пусто.
+        pdf_args = self._pdf_resolution_args([input_path])
+
         cmd = [
             settings.audiveris_cmd,
             "-batch",
             "-constant", f"org.audiveris.omr.sheet.ScaleBuilder.minInterline={settings.min_interline}",
+            *pdf_args,
             # *movement_args,
             *preset_args,
             "-transcribe", "-export",
@@ -570,12 +624,19 @@ class AudiverisService:
         # Preprocess all input images (may convert WebP to JPG)
         processed_paths = [self._prepare_input(p, enhance) for p in input_paths]
 
+        # PDF-входы: ограничиваем DPI рендера, иначе Audiveris отбросит крупные
+        # листы («Too large image») уже на шаге сборки compound-книги (там PDF и
+        # рендерится). Применяем к ОБОИМ шагам — -constant живёт в рамках одного
+        # JVM-вызова.
+        pdf_args = self._pdf_resolution_args(processed_paths)
+
         # Step 1: Create compound book from playlist
         playlist_path = self._create_playlist_xml(processed_paths, output_dir)
         cmd_build = [
             settings.audiveris_cmd,
             "-batch",
             "-constant", f"org.audiveris.omr.sheet.ScaleBuilder.minInterline={settings.min_interline}",
+            *pdf_args,
             # Плейлист — это всегда одна песня по нескольким фотографиям, поэтому
             # детекцию indented systems выключаем (см. _NO_MOVEMENT_SPLIT). Аргумент
             # дублируется и в cmd_export, потому что -constant действует только в
@@ -611,6 +672,7 @@ class AudiverisService:
             settings.audiveris_cmd,
             "-batch",
             "-constant", f"org.audiveris.omr.sheet.ScaleBuilder.minInterline={settings.min_interline}",
+            *pdf_args,
             *self._NO_MOVEMENT_SPLIT,
             *preset_args,
             "-transcribe",
@@ -677,6 +739,10 @@ class AudiverisService:
         for line in stdout.split("\n"):
             # Look for WARN/ERROR lines with exceptions
             if "Error in performing" in line or "Exception" in line:
+                errors.append(line.strip())
+            # Слишком большой лист: Audiveris молча (WARN) отбрасывает страницу и
+            # не создаёт партитур — без этой строки ошибка выглядит как «нет выхода».
+            elif "Too large image" in line:
                 errors.append(line.strip())
             # Look for specific error patterns
             elif "WARN" in line and ("Error" in line or "null" in line.lower()):

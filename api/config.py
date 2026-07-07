@@ -26,6 +26,17 @@ class Settings(BaseSettings):
     cleanup_interval_seconds: int = 3600
     max_pdf_pages: int = 5
     processing_timeout_per_file_seconds: int = 60
+    # Рендер PDF в Audiveris. Audiveris рендерит PDF на фиксированных 300 DPI и
+    # ОТБРАСЫВАЕТ лист, если картинка > maxPixelCount (20 млн пикселей, хардкод
+    # LoadStep.java) → «Too large image» → Created scores: [] → нет MusicXML.
+    # Ловушка: телефонные «фото → PDF» (iOS Quartz PDFContext) кладут MediaBox в
+    # пиксельных размерах фото (напр. 1448×2048 pt), и 300 DPI даёт ~51 Мп >> 20 Мп.
+    # Поэтому для PDF мы считаем БЕЗОПАСНЫЙ DPI по размеру самой большой страницы,
+    # чтобы уложиться в pdf_max_pixels, и передаём его Audiveris как -constant
+    # org.audiveris.omr.image.ImageLoading.pdfResolution. Нормальные PDF (влезающие
+    # на 300 DPI) рендерятся на полном pdf_render_dpi без потери качества.
+    pdf_render_dpi: int = 300      # верхняя граница (дефолт Audiveris)
+    pdf_max_pixels: int = 18_000_000  # бюджет пикселей на страницу (запас под 20М лимит)
     # Image preprocessing
     # Upscale only genuinely tiny scans. Normal sheet-music scans (~1000-1800px)
     # transcribe fine at native resolution; upscaling them blurs small tempo/metronome
