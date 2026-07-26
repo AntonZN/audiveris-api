@@ -7,6 +7,8 @@
 привязываются к пользователю приложения по заголовку ``X-Device-Id``.
 """
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
@@ -15,6 +17,7 @@ from api.catalog_models import (
     AppUser,
     Author,
     Collection,
+    CollectionItem,
     Genre,
     Instrument,
     PlayEvent,
@@ -28,6 +31,7 @@ from api.catalog_schemas import (
     AuthorOut,
     CollectionDetail,
     CollectionListItem,
+    InstrumentOut,
     RateRequest,
     ScoreDetail,
     ScoreListItem,
@@ -53,6 +57,15 @@ def _term(obj) -> TermOut:
     return TermOut(id=obj.id, name=obj.name, slug=obj.slug)
 
 
+def _instrument_out(i: Instrument) -> InstrumentOut:
+    return InstrumentOut(
+        id=i.id,
+        name=i.name,
+        slug=i.slug,
+        icon_url=file_public_url(i.icon),
+    )
+
+
 def _author_out(a: Author) -> AuthorOut:
     return AuthorOut(
         id=a.id,
@@ -71,6 +84,7 @@ def _score_item(s: Score) -> ScoreListItem:
         title=s.title,
         slug=s.slug,
         author=s.author.name if s.author else None,
+        instruments=[_instrument_out(i) for i in s.instruments],
         cover_url=file_public_url(s.cover),
         format=s.format.value if s.format else None,
         difficulty=s.difficulty.value if s.difficulty else None,
@@ -88,7 +102,6 @@ def _score_detail(s: Score) -> ScoreDetail:
         description=s.description,
         author_obj=_author_out(s.author) if s.author else None,
         genres=[_term(g) for g in s.genres],
-        instruments=[_term(i) for i in s.instruments],
         opus=s.opus,
         year=s.year,
         lyricist=s.lyricist,
@@ -120,11 +133,16 @@ def list_styles(db: Session = Depends(get_db)) -> list[TermOut]:
     return [_term(r) for r in rows]
 
 
-@router.get("/instruments", response_model=list[TermOut], summary="Список инструментов")
-def list_instruments(db: Session = Depends(get_db)) -> list[TermOut]:
-    """Все инструменты (id/name/slug). `slug` → фильтр `?instrument=<slug>`."""
+@router.get(
+    "/instruments",
+    response_model=list[InstrumentOut],
+    summary="Список инструментов",
+)
+def list_instruments(db: Session = Depends(get_db)) -> list[InstrumentOut]:
+    """Все инструменты (`id`, `name`, `slug`, `iconUrl`). `slug` используется
+    в фильтре `?instrument=<slug>`; `iconUrl` может быть null."""
     rows = db.execute(select(Instrument).order_by(Instrument.name)).scalars().all()
-    return [_term(r) for r in rows]
+    return [_instrument_out(r) for r in rows]
 
 
 @router.get("/authors", response_model=list[AuthorOut], summary="Список авторов")
@@ -170,25 +188,53 @@ def list_collections(
     response_model=CollectionDetail,
     summary="Подборка с нотами (по id)",
 )
-def get_collection(collection_id: int, db: Session = Depends(get_db)) -> CollectionDetail:
+def get_collection(
+    collection_id: int,
+    page: int = Query(1, ge=1, description="Номер страницы, с 1"),
+    page_size: int = Query(
+        20,
+        ge=1,
+        le=100,
+        description="Размер страницы, 1..100 (по умолчанию 20)",
+    ),
+    db: Session = Depends(get_db),
+) -> CollectionDetail:
     """Подборка по `id` вместе с её нотами (`scores`, краткие карточки) в
-    заданном порядке. Только опубликованные ноты. 404, если подборки нет."""
+    заданном порядке. Поддерживает пагинацию через `page` и `page_size`;
+    ответ содержит `total`, `page`, `pageSize`. Только опубликованные ноты.
+    404, если подборки нет."""
     c = db.execute(
         select(Collection)
         .where(Collection.id == collection_id, Collection.is_published.is_(True))
-        .options(
-            selectinload(Collection.items),
-        )
     ).scalar_one_or_none()
     if not c:
         raise HTTPException(status_code=404, detail="Collection not found")
 
-    # Берём опубликованные ноты подборки в порядке position.
-    scores = [
-        item.score
-        for item in c.items
-        if item.score is not None and item.score.is_published
-    ]
+    score_filters = (
+        CollectionItem.collection_id == c.id,
+        Score.is_published.is_(True),
+    )
+    total = db.execute(
+        select(func.count())
+        .select_from(CollectionItem)
+        .join(Score, Score.id == CollectionItem.score_id)
+        .where(*score_filters)
+    ).scalar_one()
+
+    scores = db.execute(
+        select(Score)
+        .join(CollectionItem, CollectionItem.score_id == Score.id)
+        .where(*score_filters)
+        .order_by(CollectionItem.position, CollectionItem.id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .options(
+            selectinload(Score.author),
+            selectinload(Score.style),
+            selectinload(Score.instruments),
+        )
+    ).scalars().all()
+
     return CollectionDetail(
         id=c.id,
         title=c.title,
@@ -196,8 +242,11 @@ def get_collection(collection_id: int, db: Session = Depends(get_db)) -> Collect
         description=c.description,
         cover_url=file_public_url(c.cover),
         is_featured=c.is_featured,
-        items_count=len(scores),
+        items_count=total,
         scores=[_score_item(s) for s in scores],
+        total=total,
+        page=page,
+        page_size=page_size,
     )
 
 
@@ -241,10 +290,10 @@ def list_scores(
     **Пагинация.** Ответ: `{ items, total, page, pageSize }`. Всего страниц =
     `ceil(total / pageSize)`; следующая есть, пока `page * pageSize < total`.
 
-    **Поля `items` — краткие** (обложка, автор-строка, формат, сложность, стиль,
-    агрегаты рейтинга/проигрываний). За полной карточкой, файлами (MusicXML/MIDI/
-    MP3/PDF) и списками жанров/инструментов идите в `GET /catalog/scores/{id}`
-    по полю `id` из элемента списка.
+    **Поля `items` — краткие** (обложка, автор-строка, инструменты, формат,
+    сложность, стиль, агрегаты рейтинга/проигрываний). За полной карточкой,
+    файлами (MusicXML/MIDI/MP3/PDF) и списком жанров идите в
+    `GET /catalog/scores/{id}` по полю `id` из элемента списка.
 
     **Формат ответа** — camelCase (`coverUrl`, `ratingAvg`, `pageSize` …);
     `*Url`-поля — абсолютные ссылки на медиа (можно подставлять в `src`).
@@ -277,7 +326,82 @@ def list_scores(
     total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
 
     stmt = stmt.order_by(*_SORTS[sort]).offset((page - 1) * page_size).limit(page_size)
-    rows = db.execute(stmt.options(selectinload(Score.author), selectinload(Score.style))).scalars().all()
+    rows = db.execute(
+        stmt.options(
+            selectinload(Score.author),
+            selectinload(Score.style),
+            selectinload(Score.instruments),
+        )
+    ).scalars().all()
+
+    return ScoreListResponse(
+        items=[_score_item(s) for s in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get(
+    "/scores/popular",
+    response_model=ScoreListResponse,
+    summary="Популярные ноты за неделю или месяц",
+)
+def list_popular_scores(
+    period: str = Query(
+        "week",
+        pattern="^(week|month)$",
+        description="Период популярности: week — последние 7 дней, month — последние 30 дней",
+    ),
+    page: int = Query(1, ge=1, description="Номер страницы, с 1"),
+    page_size: int = Query(
+        20,
+        ge=1,
+        le=100,
+        description="Размер страницы, 1..100 (по умолчанию 20)",
+    ),
+    db: Session = Depends(get_db),
+) -> ScoreListResponse:
+    """Опубликованные ноты, отсортированные по числу проигрываний за выбранный
+    период. `week` считает последние 7 дней, `month` — последние 30 дней.
+    Ноты без проигрываний за период в ответ не попадают.
+
+    Ответ использует стандартную пагинацию `{ items, total, page, pageSize }`.
+    """
+    period_days = 7 if period == "week" else 30
+    cutoff = datetime.now(timezone.utc) - timedelta(days=period_days)
+
+    period_plays = (
+        select(
+            PlayEvent.score_id.label("score_id"),
+            func.count(PlayEvent.id).label("period_plays_count"),
+        )
+        .where(PlayEvent.created_at >= cutoff)
+        .group_by(PlayEvent.score_id)
+        .subquery()
+    )
+    stmt = (
+        select(Score)
+        .join(period_plays, period_plays.c.score_id == Score.id)
+        .where(Score.is_published.is_(True))
+    )
+    total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
+
+    rows = db.execute(
+        stmt.order_by(
+            period_plays.c.period_plays_count.desc(),
+            Score.plays_count.desc(),
+            Score.created_at.desc(),
+            Score.id,
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .options(
+            selectinload(Score.author),
+            selectinload(Score.style),
+            selectinload(Score.instruments),
+        )
+    ).scalars().all()
 
     return ScoreListResponse(
         items=[_score_item(s) for s in rows],

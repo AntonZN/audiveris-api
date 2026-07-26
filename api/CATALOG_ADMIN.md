@@ -43,7 +43,7 @@ docker compose up -d --build
 ## Модель данных
 
 - **Score** (нота): `title`, `slug` (авто из title), `author`, `style`, `format`
-  (solo/ensemble/orchestra/…), `difficulty`, `genres[]`, `instruments[]`,
+  (solo/ensemble/orchestra/…), `difficulty` (`1`/`2`/`3` в API), `genres[]`, `instruments[]`,
   `opus`, `year`, `lyricist`, `license`, файлы `cover`/`music_file`/`midi_file`/
   `audio_file`/`pdf_file`, агрегаты `rating_avg`/`rating_count`/`plays_count`,
   `is_published`, поля импорта `source`/`source_id`/`source_url`.
@@ -52,7 +52,8 @@ docker compose up -d --build
   на странице ноты — поле «Подборки» (оба — ajax-поиск select2, первые 10 при фокусе).
   Тонкая настройка порядка (`position`) — во вьюхе «Состав подборок». В API подборка
   читается через упорядоченное `items`.
-- Справочники: **Author**, **Genre**, **Style**, **Instrument**.
+- Справочники: **Author**, **Genre**, **Style**, **Instrument** (`icon` загружается
+  в админке и возвращается в API как `iconUrl`).
 - Активность: **AppUser** (по заголовку `X-Device-Id`), **Rating** (1..5,
   unique на пользователя+ноту), **PlayEvent**.
 
@@ -65,8 +66,9 @@ docker compose up -d --build
 |---|---|---|
 | GET | `/catalog/genres` `/styles` `/instruments` `/authors` | справочники |
 | GET | `/catalog/collections?featured=true` | подборки (для главной) |
-| GET | `/catalog/collections/{slug}` | подборка с нотами |
+| GET | `/catalog/collections/{id}?page=1&page_size=20` | подборка с нотами и пагинацией |
 | GET | `/catalog/scores` | каталог: `q, genre, style, instrument, author, sort(new\|popular\|rating), page, page_size` |
+| GET | `/catalog/scores/popular?period=week\|month` | популярные ноты за последние 7 или 30 дней |
 | GET | `/catalog/scores/{slug}` | карточка ноты (ссылки на файлы) |
 | POST | `/catalog/scores/{id}/play` | засчитать проигрывание (заголовок `X-Device-Id` опционален) |
 | POST | `/catalog/scores/{id}/rate` | оценка `{ "value": 1..5 }` (заголовок `X-Device-Id` обязателен) |

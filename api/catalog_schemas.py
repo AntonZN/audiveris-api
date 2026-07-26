@@ -4,6 +4,7 @@ from datetime import datetime
 
 from pydantic import Field
 
+from api.catalog_enums import Difficulty
 from api.models import ApiModel
 
 
@@ -18,11 +19,17 @@ class AuthorOut(ApiModel):
 
 
 class TermOut(ApiModel):
-    """Справочный термин (жанр / стиль / инструмент)."""
+    """Справочный термин (жанр / стиль)."""
 
     id: int
     name: str
     slug: str
+
+
+class InstrumentOut(TermOut):
+    """Инструмент с опциональной публичной ссылкой на иконку."""
+
+    icon_url: str | None = None
 
 
 class ScoreListItem(ApiModel):
@@ -32,9 +39,10 @@ class ScoreListItem(ApiModel):
     title: str
     slug: str
     author: str | None = None
+    instruments: list[InstrumentOut] = []
     cover_url: str | None = None
     format: str | None = None
-    difficulty: str | None = None
+    difficulty: Difficulty | None = None
     style: str | None = None
     rating_avg: float = 0.0
     rating_count: int = 0
@@ -47,7 +55,6 @@ class ScoreDetail(ScoreListItem):
     description: str | None = None
     author_obj: AuthorOut | None = Field(default=None, alias="authorObj")
     genres: list[TermOut] = []
-    instruments: list[TermOut] = []
     opus: str | None = None
     year: int | None = None
     lyricist: str | None = None
@@ -79,6 +86,9 @@ class CollectionListItem(ApiModel):
 
 class CollectionDetail(CollectionListItem):
     scores: list[ScoreListItem] = []
+    total: int
+    page: int
+    page_size: int
 
 
 class RateRequest(ApiModel):

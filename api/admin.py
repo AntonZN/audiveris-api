@@ -207,9 +207,13 @@ class InstrumentAdmin(ModelView, model=Instrument):
     name_plural = "Инструменты"
     category = "Каталог"
     icon = "fa-solid fa-guitar"
-    column_list = [Instrument.id, Instrument.name]
+    column_list = [Instrument.icon, Instrument.id, Instrument.name]
     column_searchable_list = [Instrument.name]
     form_excluded_columns = [Instrument.slug]
+    column_formatters = {Instrument.icon: _image_formatter("icon")}
+    column_formatters_detail = {
+        Instrument.icon: _image_formatter("icon", size=240)
+    }
 
 
 # --------------------------------------------------------------------------- #

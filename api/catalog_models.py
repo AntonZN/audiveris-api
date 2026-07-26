@@ -35,6 +35,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from api.catalog_enums import Difficulty
 from api.db import Base
 from api.storage import storage
 
@@ -51,12 +52,6 @@ class ScoreFormat(str, enum.Enum):
     choir = "choir"
     band = "band"
     other = "other"
-
-
-class Difficulty(str, enum.Enum):
-    beginner = "beginner"
-    intermediate = "intermediate"
-    advanced = "advanced"
 
 
 class SourceType(str, enum.Enum):
@@ -148,6 +143,7 @@ class Instrument(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     slug: Mapped[str] = mapped_column(String(140), unique=True, index=True)
+    icon = Column(ImageType(storage=storage), nullable=True)
 
     def __str__(self) -> str:
         return self.name
@@ -175,7 +171,14 @@ class Score(Base):
         Enum(ScoreFormat, native_enum=False, length=20), nullable=True
     )
     difficulty: Mapped[Difficulty | None] = mapped_column(
-        Enum(Difficulty, native_enum=False, length=20), nullable=True
+        Enum(
+            Difficulty,
+            native_enum=False,
+            length=20,
+            create_constraint=True,
+            name="ck_scores_difficulty",
+        ),
+        nullable=True,
     )
 
     # Метаданные произведения
