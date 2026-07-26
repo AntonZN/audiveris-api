@@ -67,7 +67,7 @@ docker compose up -d --build
 | GET | `/catalog/genres` `/styles` `/instruments` `/authors` | справочники |
 | GET | `/catalog/collections?featured=true` | подборки (для главной) |
 | GET | `/catalog/collections/{id}?page=1&page_size=20` | подборка с нотами и пагинацией |
-| GET | `/catalog/scores` | каталог: `q, genre, style, instrument, author, sort(new\|popular\|rating), page, page_size` |
+| GET | `/catalog/scores` | каталог: `q, genre, style, instrument, author, collection, sort(new\|popular\|rating), page, page_size` |
 | GET | `/catalog/scores/popular?period=week\|month` | популярные ноты за последние 7 или 30 дней |
 | GET | `/catalog/scores/{slug}` | карточка ноты (ссылки на файлы) |
 | POST | `/catalog/scores/{id}/play` | засчитать проигрывание (заголовок `X-Device-Id` опционален) |

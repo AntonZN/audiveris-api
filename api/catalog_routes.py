@@ -269,6 +269,11 @@ def list_scores(
         None, description="Фильтр по инструменту — slug из GET /catalog/instruments"
     ),
     author: str | None = Query(None, description="Фильтр по автору — slug из GET /catalog/authors"),
+    collection: int | None = Query(
+        None,
+        ge=1,
+        description="Фильтр по подборке — id из GET /catalog/collections",
+    ),
     sort: str = Query(
         "new",
         pattern="^(new|popular|rating)$",
@@ -281,11 +286,13 @@ def list_scores(
     """Главный метод каталога: опубликованные ноты с пагинацией, фильтрами,
     поиском и сортировкой.
 
-    **Фильтры** (`q`, `genre`, `style`, `instrument`, `author`) **необязательны и
-    комбинируются по И** — например `?genre=lied&author=schubert&sort=popular`
-    вернёт песни Шуберта в жанре Lied, по популярности. Значения фильтров (кроме
-    `q`) — это `slug` из справочников: возьмите их из `GET /catalog/genres`,
-    `/styles`, `/instruments`, `/authors`. `q` ищет вхождение в названии.
+    **Фильтры** (`q`, `genre`, `style`, `instrument`, `author`, `collection`)
+    **необязательны и комбинируются по И** — например
+    `?genre=lied&author=schubert&collection=3&sort=popular` вернёт песни Шуберта
+    в жанре Lied из подборки с id=3, по популярности. `genre`, `style`,
+    `instrument` и `author` принимают `slug` из соответствующих справочников;
+    `collection` принимает `id` из `GET /catalog/collections`. `q` ищет
+    вхождение в названии.
 
     **Пагинация.** Ответ: `{ items, total, page, pageSize }`. Всего страниц =
     `ceil(total / pageSize)`; следующая есть, пока `page * pageSize < total`.
@@ -320,6 +327,17 @@ def list_scores(
                 select(score_instruments.c.score_id)
                 .join(Instrument, Instrument.id == score_instruments.c.instrument_id)
                 .where(Instrument.slug == instrument)
+            )
+        )
+    if collection:
+        stmt = stmt.where(
+            Score.id.in_(
+                select(CollectionItem.score_id)
+                .join(Collection, Collection.id == CollectionItem.collection_id)
+                .where(
+                    CollectionItem.collection_id == collection,
+                    Collection.is_published.is_(True),
+                )
             )
         )
 
