@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from api.catalog_enums import Difficulty
 from api.catalog_models import (
     AppUser,
     Author,
@@ -274,6 +275,10 @@ def list_scores(
         ge=1,
         description="Фильтр по подборке — id из GET /catalog/collections",
     ),
+    difficulty: Difficulty | None = Query(
+        None,
+        description="Фильтр по сложности: 1, 2 или 3",
+    ),
     sort: str = Query(
         "new",
         pattern="^(new|popular|rating)$",
@@ -286,13 +291,13 @@ def list_scores(
     """Главный метод каталога: опубликованные ноты с пагинацией, фильтрами,
     поиском и сортировкой.
 
-    **Фильтры** (`q`, `genre`, `style`, `instrument`, `author`, `collection`)
-    **необязательны и комбинируются по И** — например
-    `?genre=lied&author=schubert&collection=3&sort=popular` вернёт песни Шуберта
+    **Фильтры** (`q`, `genre`, `style`, `instrument`, `author`, `collection`,
+    `difficulty`) **необязательны и комбинируются по И** — например
+    `?genre=lied&collection=3&difficulty=2&sort=popular` вернёт ноты сложности 2
     в жанре Lied из подборки с id=3, по популярности. `genre`, `style`,
     `instrument` и `author` принимают `slug` из соответствующих справочников;
-    `collection` принимает `id` из `GET /catalog/collections`. `q` ищет
-    вхождение в названии.
+    `collection` принимает `id` из `GET /catalog/collections`, а `difficulty` —
+    одно из значений `1`, `2`, `3`. `q` ищет вхождение в названии.
 
     **Пагинация.** Ответ: `{ items, total, page, pageSize }`. Всего страниц =
     `ceil(total / pageSize)`; следующая есть, пока `page * pageSize < total`.
@@ -309,6 +314,8 @@ def list_scores(
 
     if q:
         stmt = stmt.where(Score.title.ilike(f"%{q}%"))
+    if difficulty is not None:
+        stmt = stmt.where(Score.difficulty == difficulty)
     if style:
         stmt = stmt.join(Score.style).where(Style.slug == style)
     if author:

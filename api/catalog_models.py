@@ -214,7 +214,11 @@ class Score(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    author: Mapped["Author | None"] = relationship(back_populates="scores")
+    # Автор нужен в строковой подписи Score для ajax-select в админке.
+    author: Mapped["Author | None"] = relationship(
+        back_populates="scores",
+        lazy="joined",
+    )
     style: Mapped["Style | None"] = relationship(back_populates="scores")
     genres: Mapped[list[Genre]] = relationship(secondary=score_genres)
     instruments: Mapped[list[Instrument]] = relationship(secondary=score_instruments)
@@ -229,6 +233,8 @@ class Score(Base):
     __table_args__ = (UniqueConstraint("source", "source_id", name="uq_score_source"),)
 
     def __str__(self) -> str:
+        if self.author:
+            return f"{self.title} ({self.author.name})"
         return self.title
 
 
