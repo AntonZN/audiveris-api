@@ -84,6 +84,13 @@ class CollectionListItem(ApiModel):
     items_count: int = 0
 
 
+class CollectionListResponse(ApiModel):
+    items: list[CollectionListItem]
+    total: int
+    page: int
+    page_size: int
+
+
 class CollectionDetail(CollectionListItem):
     scores: list[ScoreListItem] = []
     total: int

@@ -52,8 +52,13 @@ from api.catalog_models import (
     PlayEvent,
     Rating,
     Score,
+    ScoreFormat,
+    SourceType,
     Style,
+    score_genres,
+    score_instruments,
 )
+from api.catalog_enums import Difficulty
 from api.config import settings
 from api.stats_models import ProcessingEvent
 from api.failures_models import FailedFile
@@ -224,6 +229,7 @@ class ScoreAdmin(ModelView, model=Score):
     name_plural = "Ноты"
     category = "Каталог"
     icon = "fa-solid fa-music"
+    list_template = "score_list.html"
     create_template = "ajax_create.html"
     edit_template = "ajax_edit.html"
     column_list = [
@@ -238,7 +244,13 @@ class ScoreAdmin(ModelView, model=Score):
         Score.plays_count,
         Score.is_published,
     ]
-    column_searchable_list = [Score.title]
+    column_searchable_list = [
+        Score.title,
+        Score.description,
+        Score.opus,
+        Score.lyricist,
+        Score.source_id,
+    ]
     # Обложку показываем картинкой, а не путём к файлу.
     column_formatters = {Score.cover: _image_formatter("cover")}
     column_formatters_detail = {Score.cover: _image_formatter("cover", size=320)}
@@ -266,6 +278,154 @@ class ScoreAdmin(ModelView, model=Score):
         "instruments": {"fields": ("name",), "order_by": "name"},
         "collections": {"fields": ("title",), "order_by": "title"},
     }
+
+    @staticmethod
+    def _selected_ints(request: Request, name: str) -> list[int]:
+        """Корректные целые значения повторяющегося query-параметра."""
+        values: list[int] = []
+        for raw_value in request.query_params.getlist(name):
+            try:
+                values.append(int(raw_value))
+            except (TypeError, ValueError):
+                continue
+        return values
+
+    @staticmethod
+    def _number(request: Request, name: str, *, integer: bool = False):
+        """Числовой query-параметр; невалидное значение просто не фильтрует."""
+        raw_value = request.query_params.get(name)
+        if raw_value is None or not raw_value.strip():
+            return None
+        try:
+            return int(raw_value) if integer else float(raw_value.replace(",", "."))
+        except (TypeError, ValueError):
+            return None
+
+    def _apply_filters(self, stmt, request: Request):
+        """Применить admin-фильтры и к списку, и к count-запросу."""
+        author_ids = self._selected_ints(request, "author")
+        if author_ids:
+            stmt = stmt.where(Score.author_id.in_(author_ids))
+
+        style_ids = self._selected_ints(request, "style")
+        if style_ids:
+            stmt = stmt.where(Score.style_id.in_(style_ids))
+
+        genre_ids = self._selected_ints(request, "genre")
+        if genre_ids:
+            stmt = stmt.where(
+                Score.id.in_(
+                    select(score_genres.c.score_id).where(
+                        score_genres.c.genre_id.in_(genre_ids)
+                    )
+                )
+            )
+
+        instrument_ids = self._selected_ints(request, "instrument")
+        if instrument_ids:
+            stmt = stmt.where(
+                Score.id.in_(
+                    select(score_instruments.c.score_id).where(
+                        score_instruments.c.instrument_id.in_(instrument_ids)
+                    )
+                )
+            )
+
+        collection_ids = self._selected_ints(request, "collection")
+        if collection_ids:
+            stmt = stmt.where(
+                Score.id.in_(
+                    select(CollectionItem.score_id).where(
+                        CollectionItem.collection_id.in_(collection_ids)
+                    )
+                )
+            )
+
+        difficulties = []
+        for value in self._selected_ints(request, "difficulty"):
+            try:
+                difficulties.append(Difficulty(value))
+            except ValueError:
+                continue
+        if difficulties:
+            stmt = stmt.where(Score.difficulty.in_(difficulties))
+
+        formats = []
+        for value in request.query_params.getlist("format"):
+            try:
+                formats.append(ScoreFormat(value))
+            except ValueError:
+                continue
+        if formats:
+            stmt = stmt.where(Score.format.in_(formats))
+
+        sources = []
+        for value in request.query_params.getlist("source"):
+            try:
+                sources.append(SourceType(value))
+            except ValueError:
+                continue
+        if sources:
+            stmt = stmt.where(Score.source.in_(sources))
+
+        is_published = request.query_params.get("is_published")
+        if is_published in {"true", "false"}:
+            stmt = stmt.where(Score.is_published.is_(is_published == "true"))
+
+        has_cover = request.query_params.get("has_cover")
+        if has_cover == "true":
+            stmt = stmt.where(Score.cover.is_not(None))
+        elif has_cover == "false":
+            stmt = stmt.where(Score.cover.is_(None))
+
+        range_filters = (
+            ("rating_min", Score.rating_avg, ">=", False),
+            ("rating_max", Score.rating_avg, "<=", False),
+            ("rating_count_min", Score.rating_count, ">=", True),
+            ("rating_count_max", Score.rating_count, "<=", True),
+            ("plays_min", Score.plays_count, ">=", True),
+            ("plays_max", Score.plays_count, "<=", True),
+            ("year_from", Score.year, ">=", True),
+            ("year_to", Score.year, "<=", True),
+        )
+        for param, column, operator, integer in range_filters:
+            value = self._number(request, param, integer=integer)
+            if value is not None:
+                stmt = stmt.where(
+                    column >= value if operator == ">=" else column <= value
+                )
+
+        return stmt
+
+    def list_query(self, request: Request):
+        return self._apply_filters(super().list_query(request), request)
+
+    def count_query(self, request: Request):
+        return self._apply_filters(super().count_query(request), request)
+
+    def get_filter_options(self) -> dict:
+        """Актуальные варианты для фильтров на странице списка нот."""
+        with SessionLocal() as db:
+            return {
+                "authors": db.execute(
+                    select(Author.id, Author.name).order_by(Author.name)
+                ).all(),
+                "genres": db.execute(
+                    select(Genre.id, Genre.name).order_by(Genre.name)
+                ).all(),
+                "styles": db.execute(
+                    select(Style.id, Style.name).order_by(Style.name)
+                ).all(),
+                "instruments": db.execute(
+                    select(Instrument.id, Instrument.name).order_by(Instrument.name)
+                ).all(),
+                "collections": db.execute(
+                    select(Collection.id, Collection.title).order_by(Collection.title)
+                ).all(),
+                "difficulties": list(Difficulty),
+                "formats": list(ScoreFormat),
+                "sources": list(SourceType),
+            }
 
 
 class CollectionAdmin(ModelView, model=Collection):

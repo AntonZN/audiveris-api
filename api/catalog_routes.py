@@ -32,6 +32,7 @@ from api.catalog_schemas import (
     AuthorOut,
     CollectionDetail,
     CollectionListItem,
+    CollectionListResponse,
     InstrumentOut,
     RateRequest,
     ScoreDetail,
@@ -157,31 +158,63 @@ def list_authors(db: Session = Depends(get_db)) -> list[AuthorOut]:
 # --------------------------------------------------------------------------- #
 # Подборки
 # --------------------------------------------------------------------------- #
-@router.get("/collections", response_model=list[CollectionListItem], summary="Список подборок")
+@router.get(
+    "/collections",
+    response_model=CollectionListResponse,
+    summary="Список подборок",
+)
 def list_collections(
     featured: bool | None = Query(None, description="Только избранные (для главной)"),
+    has_cover: bool | None = Query(
+        None,
+        description="true — только с обложкой, false — только без обложки",
+    ),
+    page: int = Query(1, ge=1, description="Номер страницы, с 1"),
+    page_size: int = Query(
+        20,
+        ge=1,
+        le=100,
+        description="Размер страницы, 1..100 (по умолчанию 20)",
+    ),
     db: Session = Depends(get_db),
-) -> list[CollectionListItem]:
+) -> CollectionListResponse:
     """Опубликованные подборки (кураторские списки нот), в порядке `position`.
-    `?featured=true` — только избранные, для блока на главной. Возвращает краткие
-    карточки с `itemsCount`; за составом идите в `GET /catalog/collections/{id}`."""
+    `?featured=true` — только избранные, `?has_cover=true` — только подборки с
+    обложкой. Ответ использует пагинацию `{ items, total, page, pageSize }`;
+    за составом идите в `GET /catalog/collections/{id}`."""
     stmt = select(Collection).where(Collection.is_published.is_(True))
     if featured is not None:
         stmt = stmt.where(Collection.is_featured.is_(featured))
-    stmt = stmt.order_by(Collection.position, Collection.created_at.desc())
-    rows = db.execute(stmt.options(selectinload(Collection.items))).scalars().all()
-    return [
-        CollectionListItem(
-            id=c.id,
-            title=c.title,
-            slug=c.slug,
-            description=c.description,
-            cover_url=file_public_url(c.cover),
-            is_featured=c.is_featured,
-            items_count=len(c.items),
+    if has_cover is not None:
+        stmt = stmt.where(
+            Collection.cover.is_not(None) if has_cover else Collection.cover.is_(None)
         )
-        for c in rows
-    ]
+
+    total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
+
+    stmt = (
+        stmt.order_by(Collection.position, Collection.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    rows = db.execute(stmt.options(selectinload(Collection.items))).scalars().all()
+    return CollectionListResponse(
+        items=[
+            CollectionListItem(
+                id=c.id,
+                title=c.title,
+                slug=c.slug,
+                description=c.description,
+                cover_url=file_public_url(c.cover),
+                is_featured=c.is_featured,
+                items_count=len(c.items),
+            )
+            for c in rows
+        ],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get(
