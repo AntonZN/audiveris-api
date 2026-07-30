@@ -55,8 +55,10 @@ from api.catalog_models import (
     ScoreFormat,
     SourceType,
     Style,
+    Tag,
     score_genres,
     score_instruments,
+    score_tags,
 )
 from api.catalog_enums import Difficulty
 from api.config import settings
@@ -221,6 +223,17 @@ class InstrumentAdmin(ModelView, model=Instrument):
     }
 
 
+class TagAdmin(ModelView, model=Tag):
+    name = "Тег"
+    name_plural = "Теги"
+    category = "Каталог"
+    icon = "fa-solid fa-tag"
+    column_list = [Tag.id, Tag.name, Tag.slug]
+    column_searchable_list = [Tag.name, Tag.slug]
+    column_sortable_list = [Tag.id, Tag.name]
+    form_excluded_columns = [Tag.slug, Tag.scores]
+
+
 # --------------------------------------------------------------------------- #
 # Ноты и подборки
 # --------------------------------------------------------------------------- #
@@ -276,6 +289,7 @@ class ScoreAdmin(ModelView, model=Score):
         "style": {"fields": ("name",), "order_by": "name"},
         "genres": {"fields": ("name",), "order_by": "name"},
         "instruments": {"fields": ("name",), "order_by": "name"},
+        "tags": {"fields": ("name",), "order_by": "name"},
         "collections": {"fields": ("title",), "order_by": "title"},
     }
 
@@ -327,6 +341,16 @@ class ScoreAdmin(ModelView, model=Score):
                 Score.id.in_(
                     select(score_instruments.c.score_id).where(
                         score_instruments.c.instrument_id.in_(instrument_ids)
+                    )
+                )
+            )
+
+        tag_ids = self._selected_ints(request, "tag")
+        if tag_ids:
+            stmt = stmt.where(
+                Score.id.in_(
+                    select(score_tags.c.score_id).where(
+                        score_tags.c.tag_id.in_(tag_ids)
                     )
                 )
             )
@@ -418,6 +442,9 @@ class ScoreAdmin(ModelView, model=Score):
                 ).all(),
                 "instruments": db.execute(
                     select(Instrument.id, Instrument.name).order_by(Instrument.name)
+                ).all(),
+                "tags": db.execute(
+                    select(Tag.id, Tag.name).order_by(Tag.name)
                 ).all(),
                 "collections": db.execute(
                     select(Collection.id, Collection.title).order_by(Collection.title)
@@ -682,6 +709,7 @@ def init_admin(app: FastAPI) -> Admin:
         GenreAdmin,
         StyleAdmin,
         InstrumentAdmin,
+        TagAdmin,
         AppUserAdmin,
         RatingAdmin,
         PlayEventAdmin,

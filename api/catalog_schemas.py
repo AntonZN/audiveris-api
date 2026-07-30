@@ -40,6 +40,7 @@ class ScoreListItem(ApiModel):
     slug: str
     author: str | None = None
     instruments: list[InstrumentOut] = []
+    tags: list[TermOut] = []
     cover_url: str | None = None
     format: str | None = None
     difficulty: Difficulty | None = None
@@ -69,6 +70,13 @@ class ScoreDetail(ScoreListItem):
 
 class ScoreListResponse(ApiModel):
     items: list[ScoreListItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class TagListResponse(ApiModel):
+    items: list[TermOut]
     total: int
     page: int
     page_size: int

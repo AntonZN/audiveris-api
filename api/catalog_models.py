@@ -78,6 +78,13 @@ score_instruments = Table(
     Column("instrument_id", ForeignKey("instruments.id", ondelete="CASCADE"), primary_key=True),
 )
 
+score_tags = Table(
+    "score_tags",
+    Base.metadata,
+    Column("score_id", ForeignKey("scores.id", ondelete="CASCADE"), primary_key=True),
+    Column("tag_id", ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
+)
+
 
 # --------------------------------------------------------------------------- #
 # Справочники
@@ -144,6 +151,22 @@ class Instrument(Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     slug: Mapped[str] = mapped_column(String(140), unique=True, index=True)
     icon = Column(ImageType(storage=storage), nullable=True)
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    slug: Mapped[str] = mapped_column(String(140), unique=True, index=True)
+
+    scores: Mapped[list["Score"]] = relationship(
+        secondary=score_tags,
+        back_populates="tags",
+    )
 
     def __str__(self) -> str:
         return self.name
@@ -222,6 +245,10 @@ class Score(Base):
     style: Mapped["Style | None"] = relationship(back_populates="scores")
     genres: Mapped[list[Genre]] = relationship(secondary=score_genres)
     instruments: Mapped[list[Instrument]] = relationship(secondary=score_instruments)
+    tags: Mapped[list[Tag]] = relationship(
+        secondary=score_tags,
+        back_populates="scores",
+    )
     # Подборки, в которые входит нота (обратная сторона Collection.scores) —
     # чтобы выбирать подборки прямо в форме ноты.
     collections: Mapped[list["Collection"]] = relationship(
@@ -363,6 +390,7 @@ _SLUGGED = {
     Genre: "name",
     Style: "name",
     Instrument: "name",
+    Tag: "name",
     Score: "title",
     Collection: "title",
 }

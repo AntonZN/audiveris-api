@@ -25,8 +25,10 @@ from api.catalog_models import (
     Rating,
     Score,
     Style,
+    Tag,
     score_genres,
     score_instruments,
+    score_tags,
 )
 from api.catalog_schemas import (
     AuthorOut,
@@ -39,6 +41,7 @@ from api.catalog_schemas import (
     ScoreListItem,
     ScoreListResponse,
     ScoreStats,
+    TagListResponse,
     TermOut,
 )
 from api.db import get_db
@@ -87,6 +90,7 @@ def _score_item(s: Score) -> ScoreListItem:
         slug=s.slug,
         author=s.author.name if s.author else None,
         instruments=[_instrument_out(i) for i in s.instruments],
+        tags=[_term(tag) for tag in s.tags],
         cover_url=file_public_url(s.cover),
         format=s.format.value if s.format else None,
         difficulty=s.difficulty.value if s.difficulty else None,
@@ -153,6 +157,40 @@ def list_authors(db: Session = Depends(get_db)) -> list[AuthorOut]:
     `photoUrl` — абсолютная ссылка на портрет (может быть null)."""
     rows = db.execute(select(Author).order_by(Author.name)).scalars().all()
     return [_author_out(r) for r in rows]
+
+
+@router.get(
+    "/tags",
+    response_model=TagListResponse,
+    summary="Список тегов",
+)
+def list_tags(
+    page: int = Query(1, ge=1, description="Номер страницы, с 1"),
+    page_size: int = Query(
+        20,
+        ge=1,
+        le=100,
+        description="Размер страницы, 1..100 (по умолчанию 20)",
+    ),
+    db: Session = Depends(get_db),
+) -> TagListResponse:
+    """Теги для нот, по алфавиту. Ответ использует пагинацию
+    `{ items, total, page, pageSize }`. Поле `slug` передавайте повторяющимся
+    параметром `tag` в `GET /catalog/scores`, например
+    `?tag=for-beginners&tag=popular`."""
+    total = db.execute(select(func.count(Tag.id))).scalar_one()
+    rows = db.execute(
+        select(Tag)
+        .order_by(Tag.name, Tag.id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).scalars().all()
+    return TagListResponse(
+        items=[_term(tag) for tag in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -266,6 +304,7 @@ def get_collection(
             selectinload(Score.author),
             selectinload(Score.style),
             selectinload(Score.instruments),
+            selectinload(Score.tags),
         )
     ).scalars().all()
 
@@ -303,6 +342,13 @@ def list_scores(
         None, description="Фильтр по инструменту — slug из GET /catalog/instruments"
     ),
     author: str | None = Query(None, description="Фильтр по автору — slug из GET /catalog/authors"),
+    tag: list[str] | None = Query(
+        None,
+        description=(
+            "Фильтр по тегам — повторяющийся slug из GET /catalog/tags; "
+            "при нескольких значениях подходит любой из тегов"
+        ),
+    ),
     collection: int | None = Query(
         None,
         ge=1,
@@ -324,11 +370,13 @@ def list_scores(
     """Главный метод каталога: опубликованные ноты с пагинацией, фильтрами,
     поиском и сортировкой.
 
-    **Фильтры** (`q`, `genre`, `style`, `instrument`, `author`, `collection`,
-    `difficulty`) **необязательны и комбинируются по И** — например
+    **Фильтры** (`q`, `genre`, `style`, `instrument`, `author`, `tag`,
+    `collection`, `difficulty`) **необязательны и комбинируются по И** — например
     `?genre=lied&collection=3&difficulty=2&sort=popular` вернёт ноты сложности 2
     в жанре Lied из подборки с id=3, по популярности. `genre`, `style`,
     `instrument` и `author` принимают `slug` из соответствующих справочников;
+    `tag` принимает `slug` из `GET /catalog/tags` и может повторяться
+    (`?tag=popular&tag=for-beginners` — подходит любой из указанных тегов);
     `collection` принимает `id` из `GET /catalog/collections`, а `difficulty` —
     одно из значений `1`, `2`, `3`. `q` ищет вхождение в названии.
 
@@ -353,6 +401,20 @@ def list_scores(
         stmt = stmt.join(Score.style).where(Style.slug == style)
     if author:
         stmt = stmt.join(Score.author).where(Author.slug == author)
+    tag_slugs = {
+        slug.strip()
+        for value in tag or []
+        for slug in value.split(",")
+        if slug.strip()
+    }
+    if tag_slugs:
+        stmt = stmt.where(
+            Score.id.in_(
+                select(score_tags.c.score_id)
+                .join(Tag, Tag.id == score_tags.c.tag_id)
+                .where(Tag.slug.in_(sorted(tag_slugs)))
+            )
+        )
     if genre:
         stmt = stmt.where(
             Score.id.in_(
@@ -389,6 +451,7 @@ def list_scores(
             selectinload(Score.author),
             selectinload(Score.style),
             selectinload(Score.instruments),
+            selectinload(Score.tags),
         )
     ).scalars().all()
 
@@ -458,6 +521,7 @@ def list_popular_scores(
             selectinload(Score.author),
             selectinload(Score.style),
             selectinload(Score.instruments),
+            selectinload(Score.tags),
         )
     ).scalars().all()
 
@@ -486,6 +550,7 @@ def get_score(score_id: int, db: Session = Depends(get_db)) -> ScoreDetail:
             selectinload(Score.style),
             selectinload(Score.genres),
             selectinload(Score.instruments),
+            selectinload(Score.tags),
         )
     ).scalar_one_or_none()
     if not s:
