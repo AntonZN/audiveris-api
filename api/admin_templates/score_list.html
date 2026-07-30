@@ -1,0 +1,188 @@
+{% extends "sqladmin/list.html" %}
+
+{% block content %}
+{% set options = model_view.get_filter_options() %}
+{% set query = request.query_params %}
+
+<div class="col-12">
+  <form method="get" action="{{ request.url.path }}" class="card mb-3">
+    <div class="card-header">
+      <h3 class="card-title">Фильтры</h3>
+      <div class="ms-auto text-muted small">
+        В одном поле можно выбрать несколько значений
+      </div>
+    </div>
+
+    <div class="card-body">
+      {% for name in ["search", "pageSize", "sortBy", "sort"] %}
+        {% if query.get(name) %}
+          <input type="hidden" name="{{ name }}" value="{{ query.get(name) }}">
+        {% endif %}
+      {% endfor %}
+
+      <div class="row g-3">
+        <div class="col-sm-6 col-lg-3">
+          <label class="form-label" for="filter-author">Автор</label>
+          <select id="filter-author" class="form-select score-filter-multiple" name="author" multiple>
+            {% set selected = query.getlist("author") %}
+            {% for id, name in options.authors %}
+              <option value="{{ id }}" {% if id|string in selected %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-sm-6 col-lg-3">
+          <label class="form-label" for="filter-genre">Жанр</label>
+          <select id="filter-genre" class="form-select score-filter-multiple" name="genre" multiple>
+            {% set selected = query.getlist("genre") %}
+            {% for id, name in options.genres %}
+              <option value="{{ id }}" {% if id|string in selected %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-sm-6 col-lg-3">
+          <label class="form-label" for="filter-style">Стиль</label>
+          <select id="filter-style" class="form-select score-filter-multiple" name="style" multiple>
+            {% set selected = query.getlist("style") %}
+            {% for id, name in options.styles %}
+              <option value="{{ id }}" {% if id|string in selected %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-sm-6 col-lg-3">
+          <label class="form-label" for="filter-instrument">Инструмент</label>
+          <select id="filter-instrument" class="form-select score-filter-multiple" name="instrument" multiple>
+            {% set selected = query.getlist("instrument") %}
+            {% for id, name in options.instruments %}
+              <option value="{{ id }}" {% if id|string in selected %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-sm-6 col-lg-3">
+          <label class="form-label" for="filter-difficulty">Сложность</label>
+          <select id="filter-difficulty" class="form-select score-filter-multiple" name="difficulty" multiple>
+            {% set selected = query.getlist("difficulty") %}
+            {% for difficulty in options.difficulties %}
+              <option value="{{ difficulty.value }}" {% if difficulty.value|string in selected %}selected{% endif %}>
+                {{ difficulty.value }} — {{ difficulty.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-sm-6 col-lg-3">
+          <label class="form-label" for="filter-format">Формат</label>
+          <select id="filter-format" class="form-select score-filter-multiple" name="format" multiple>
+            {% set selected = query.getlist("format") %}
+            {% for format in options.formats %}
+              <option value="{{ format.value }}" {% if format.value in selected %}selected{% endif %}>{{ format.value }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-sm-6 col-lg-3">
+          <label class="form-label" for="filter-collection">Подборка</label>
+          <select id="filter-collection" class="form-select score-filter-multiple" name="collection" multiple>
+            {% set selected = query.getlist("collection") %}
+            {% for id, title in options.collections %}
+              <option value="{{ id }}" {% if id|string in selected %}selected{% endif %}>{{ title }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-sm-6 col-lg-3">
+          <label class="form-label" for="filter-source">Источник</label>
+          <select id="filter-source" class="form-select score-filter-multiple" name="source" multiple>
+            {% set selected = query.getlist("source") %}
+            {% for source in options.sources %}
+              <option value="{{ source.value }}" {% if source.value in selected %}selected{% endif %}>{{ source.value }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-sm-6 col-lg-3">
+          <label class="form-label" for="filter-published">Публикация</label>
+          <select id="filter-published" class="form-select" name="is_published">
+            <option value="">Все</option>
+            <option value="true" {% if query.get("is_published") == "true" %}selected{% endif %}>Опубликованные</option>
+            <option value="false" {% if query.get("is_published") == "false" %}selected{% endif %}>Не опубликованные</option>
+          </select>
+        </div>
+
+        <div class="col-sm-6 col-lg-3">
+          <label class="form-label" for="filter-cover">Обложка</label>
+          <select id="filter-cover" class="form-select" name="has_cover">
+            <option value="">Все</option>
+            <option value="true" {% if query.get("has_cover") == "true" %}selected{% endif %}>Есть</option>
+            <option value="false" {% if query.get("has_cover") == "false" %}selected{% endif %}>Нет</option>
+          </select>
+        </div>
+
+        <div class="col-sm-6 col-lg-3">
+          <label class="form-label">Средний рейтинг</label>
+          <div class="input-group">
+            <input class="form-control" type="number" name="rating_min" min="0" max="5" step="0.1"
+                   value="{{ query.get('rating_min', '') }}" placeholder="от">
+            <input class="form-control" type="number" name="rating_max" min="0" max="5" step="0.1"
+                   value="{{ query.get('rating_max', '') }}" placeholder="до">
+          </div>
+        </div>
+
+        <div class="col-sm-6 col-lg-3">
+          <label class="form-label">Год</label>
+          <div class="input-group">
+            <input class="form-control" type="number" name="year_from"
+                   value="{{ query.get('year_from', '') }}" placeholder="от">
+            <input class="form-control" type="number" name="year_to"
+                   value="{{ query.get('year_to', '') }}" placeholder="до">
+          </div>
+        </div>
+
+        <div class="col-sm-6 col-lg-3">
+          <label class="form-label">Количество оценок</label>
+          <div class="input-group">
+            <input class="form-control" type="number" name="rating_count_min" min="0"
+                   value="{{ query.get('rating_count_min', '') }}" placeholder="от">
+            <input class="form-control" type="number" name="rating_count_max" min="0"
+                   value="{{ query.get('rating_count_max', '') }}" placeholder="до">
+          </div>
+        </div>
+
+        <div class="col-sm-6 col-lg-3">
+          <label class="form-label">Прослушивания</label>
+          <div class="input-group">
+            <input class="form-control" type="number" name="plays_min" min="0"
+                   value="{{ query.get('plays_min', '') }}" placeholder="от">
+            <input class="form-control" type="number" name="plays_max" min="0"
+                   value="{{ query.get('plays_max', '') }}" placeholder="до">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card-footer d-flex gap-2">
+      <button type="submit" class="btn btn-primary">Применить</button>
+      <a href="{{ request.url.path }}" class="btn btn-outline-secondary">Сбросить</a>
+    </div>
+  </form>
+</div>
+
+{{ super() }}
+{% endblock %}
+
+{% block tail %}
+  {{ super() }}
+  <script type="text/javascript">
+    $(function () {
+      $(".score-filter-multiple").select2({
+        width: "100%",
+        closeOnSelect: false,
+        allowClear: true,
+        placeholder: "Все"
+      });
+    });
+  </script>
+{% endblock %}
