@@ -599,9 +599,15 @@ def analyze_rows(
     aliases: dict[str, str | None],
     profiles: dict[str, AuthorProfile] | None = None,
     author_policy: str = "verified",
+    importable_limit: int | None = None,
 ) -> Analysis:
     result = Analysis()
     for row in rows:
+        if (
+            importable_limit is not None
+            and result.importable_rows >= importable_limit
+        ):
+            break
         result.rows += 1
         resolution = resolve_author(row.get("composer_name"), snapshot, aliases, profiles)
         if author_status_allowed(resolution.status, author_policy):
@@ -880,7 +886,9 @@ def apply_import(
         scores_by_source_id = {str(score.source_id): score for score in existing_scores}
 
         photographed_author_ids: set[int] = set()
-        for row in iter_selected_rows(args.csv, args.subset, args.limit):
+        for row in iter_selected_rows(args.csv, args.subset):
+            if args.limit is not None and counters["rows"] >= args.limit:
+                break
             status, canonical, author, profile = _db_author_resolution(
                 row.get("composer_name"),
                 authors_by_key,
@@ -1074,7 +1082,12 @@ def parse_args() -> argparse.Namespace:
             "verified-or-anonymous — также anonymous/traditional; all — все строки"
         ),
     )
-    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Максимальное число строк, прошедших выбранную политику авторов",
+    )
     parser.add_argument("--top", type=int, default=25, help="Размер top в dry-run отчёте")
     parser.add_argument("--apply", action="store_true", help="Записать изменения в БД")
     parser.add_argument(
@@ -1131,11 +1144,12 @@ def main() -> None:
             file=sys.stderr,
         )
     analysis = analyze_rows(
-        iter_selected_rows(args.csv, args.subset, args.limit),
+        iter_selected_rows(args.csv, args.subset),
         snapshot,
         aliases,
         profiles,
         args.author_policy,
+        args.limit,
     )
     print_analysis(analysis, snapshot, args.subset, args.top)
 

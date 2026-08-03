@@ -213,6 +213,25 @@ class PdmxImportTest(unittest.TestCase):
         self.assertEqual(analysis.matched_instruments["piano"], 1)
         self.assertEqual(analysis.matched_instruments["violin"], 1)
 
+    def test_analysis_limit_counts_importable_rows(self) -> None:
+        snapshot = CatalogSnapshot(
+            authors=[CatalogAuthor(id=1, name="Johann Sebastian Bach")]
+        )
+        rows = [
+            {"composer_name": "Unknown Person"},
+            {"composer_name": "Johann Sebastian Bach"},
+            {"composer_name": "Johann Sebastian Bach"},
+        ]
+        analysis = analyze_rows(
+            rows,
+            snapshot,
+            {},
+            importable_limit=1,
+        )
+        self.assertEqual(analysis.rows, 2)
+        self.assertEqual(analysis.importable_rows, 1)
+        self.assertEqual(analysis.skipped_by_author_policy, 1)
+
     def test_generated_author_source_id_is_stable(self) -> None:
         self.assertEqual(
             author_source_id("George Frideric Händel"),
