@@ -25,6 +25,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    JSON,
     String,
     Table,
     Text,
@@ -58,6 +59,7 @@ class SourceType(str, enum.Enum):
     manual = "manual"
     openscore_lieder = "openscore_lieder"
     mutopia = "mutopia"
+    pdmx = "pdmx"
     omr = "omr"
 
 
@@ -209,7 +211,12 @@ class Score(Base):
     year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     lyricist: Mapped[str | None] = mapped_column(String(255), nullable=True)
     license: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    license_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     imslp_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+    # Сырые данные внешнего корпуса. Они не публикуются напрямую через API, но
+    # позволяют повторно нормализовать авторов/теги без повторного чтения CSV.
+    source_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # Файлы. music_file (MusicXML/.mxl) — исходник; midi/audio — для прослушивания.
     cover = Column(ImageType(storage=storage), nullable=True)

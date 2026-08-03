@@ -60,6 +60,10 @@ class ScoreDetail(ScoreListItem):
     year: int | None = None
     lyricist: str | None = None
     license: str | None = None
+    license_url: str | None = None
+    source: str | None = None
+    source_id: str | None = None
+    source_url: str | None = None
     imslp_url: str | None = None
     music_xml_url: str | None = None
     midi_url: str | None = None
