@@ -3,10 +3,13 @@ from __future__ import annotations
 import unittest
 
 from scripts.import_pdmx import (
+    AuthorProfile,
     CatalogAuthor,
     CatalogSnapshot,
     analyze_rows,
+    author_status_allowed,
     author_source_id,
+    canonical_author_name,
     desired_instrument_slugs,
     gm_instrument_candidates,
     is_non_person_author,
@@ -16,6 +19,7 @@ from scripts.import_pdmx import (
     pdmx_source_id,
     resolve_author,
     row_selected,
+    source_metadata,
 )
 
 
@@ -50,6 +54,14 @@ class PdmxImportTest(unittest.TestCase):
             normalized_key("George Frideric Handel"),
         )
 
+    def test_canonical_author_name_removes_dates_and_opus(self) -> None:
+        self.assertEqual(
+            canonical_author_name("Francisco Tárrega (1852 - 1909)"),
+            "Francisco Tárrega",
+        )
+        self.assertEqual(canonical_author_name("Edvard Grieg Op. 40"), "Edvard Grieg")
+        self.assertEqual(canonical_author_name("by Scott Joplin"), "Scott Joplin")
+
     def test_author_resolution_is_conservative(self) -> None:
         snapshot = CatalogSnapshot(
             authors=[CatalogAuthor(id=7, name="Johann Sebastian Bach")]
@@ -70,6 +82,65 @@ class PdmxImportTest(unittest.TestCase):
             ]
         )
         self.assertEqual(resolve_author("John Smith", snapshot, {}).status, "ambiguous")
+
+    def test_new_author_requires_reviewed_profile(self) -> None:
+        profiles = {
+            normalized_key("Johann Sebastian Bach"): AuthorProfile(
+                canonical_name="Johann Sebastian Bach",
+                wikidata="Q1339",
+                born="1685",
+                died="1750",
+            )
+        }
+        resolution = resolve_author(
+            "J. S. Bach",
+            CatalogSnapshot(),
+            {normalized_key("J. S. Bach"): "Johann Sebastian Bach"},
+            profiles,
+        )
+        self.assertEqual(resolution.status, "reviewed")
+        self.assertEqual(resolution.profile.wikidata, "Q1339")
+
+        analysis = analyze_rows(
+            [{"composer_name": "J. S. Bach"}],
+            CatalogSnapshot(),
+            {normalized_key("J. S. Bach"): "Johann Sebastian Bach"},
+            profiles,
+        )
+        self.assertEqual(analysis.new_authors["Johann Sebastian Bach"], 1)
+
+    def test_reviewed_profile_reuses_existing_wikidata_author(self) -> None:
+        snapshot = CatalogSnapshot(
+            authors=[
+                CatalogAuthor(
+                    id=9,
+                    name="Different localized display name",
+                    wikidata="Q1339",
+                )
+            ]
+        )
+        profiles = {
+            normalized_key("Johann Sebastian Bach"): AuthorProfile(
+                canonical_name="Johann Sebastian Bach",
+                wikidata="Q1339",
+            )
+        }
+        resolution = resolve_author(
+            "J. S. Bach",
+            snapshot,
+            {normalized_key("J. S. Bach"): "Johann Sebastian Bach"},
+            profiles,
+        )
+        self.assertEqual(resolution.status, "alias-matched")
+        self.assertEqual(resolution.author.id, 9)
+
+    def test_verified_policy_rejects_unmatched_and_anonymous(self) -> None:
+        self.assertTrue(author_status_allowed("matched", "verified"))
+        self.assertTrue(author_status_allowed("reviewed", "verified"))
+        self.assertFalse(author_status_allowed("unmatched", "verified"))
+        self.assertFalse(author_status_allowed("ignored", "verified"))
+        self.assertTrue(author_status_allowed("ignored", "verified-or-anonymous"))
+        self.assertTrue(author_status_allowed("unmatched", "all"))
 
     def test_non_person_values_are_ignored(self) -> None:
         for value in ("anon.", "Traditional", "Urheber unbekannt 1720 belegt", "Composer"):
@@ -103,6 +174,20 @@ class PdmxImportTest(unittest.TestCase):
                 "https://creativecommons.org/publicdomain/zero/1.0/",
             ),
         )
+
+    def test_source_metadata_keeps_license_audit_flags(self) -> None:
+        metadata = source_metadata(
+            {
+                "license": "cc-zero",
+                "license_conflict": "False",
+                "subset:no_license_conflict": "True",
+                "subset:all_valid": "True",
+                "subset:rated_deduplicated": "True",
+            }
+        )
+        self.assertEqual(metadata["dataset"], "PDMX")
+        self.assertEqual(metadata["subset:no_license_conflict"], "True")
+        self.assertEqual(metadata["subset:rated_deduplicated"], "True")
 
     def test_analysis_reuses_existing_terms_only(self) -> None:
         snapshot = CatalogSnapshot(

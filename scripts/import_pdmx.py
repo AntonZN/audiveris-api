@@ -46,6 +46,7 @@ PDMX_DOI_URL = "https://doi.org/10.5281/zenodo.15571083"
 DEFAULT_CSV = _ROOT / "PDMX.csv"
 DEFAULT_EXPORT = _ROOT / "pdmx_prod_catalog.json"
 DEFAULT_ALIASES = Path(__file__).resolve().parent / "data" / "pdmx_author_aliases.tsv"
+DEFAULT_AUTHOR_PROFILES = Path(__file__).resolve().parent / "data" / "pdmx_authors.tsv"
 
 MISSING_VALUES = frozenset({"", "na", "n/a", "nan", "none", "null"})
 SUBSET_COLUMNS = {
@@ -80,6 +81,53 @@ TAG_WHITELIST = frozenset(
         "solo",
     }
 )
+TAG_DISPLAY_NAMES = {
+    "baroque": "Baroque",
+    "christmas": "Christmas",
+    "classical": "classical",
+    "dance": "Dance",
+    "duet": "Duet",
+    "easy": "Easy",
+    "etude": "Etude",
+    "folk": "Folk",
+    "hymn": "Hymn",
+    "jazz": "Jazz",
+    "orchestra": "Orchestra",
+    "quartet": "Quartet",
+    "romantic": "Romantic",
+    "sacred": "Sacred",
+    "satb": "SATB",
+    "solo": "Solo",
+}
+
+INSTRUMENT_DISPLAY_NAMES = {
+    "alto-saxophone": "Alto Saxophone",
+    "baritone-saxophone": "Baritone Saxophone",
+    "bass": "Bass",
+    "bassoon": "Bassoon",
+    "brass": "Brass",
+    "cello": "Cello",
+    "clarinet": "Clarinet",
+    "double-bass": "Double Bass",
+    "english-horn": "English Horn",
+    "flute": "Flute",
+    "french-horn": "French Horn",
+    "guitar": "Guitar",
+    "oboe": "Oboe",
+    "organ": "Organ",
+    "piano": "Piano",
+    "piccolo": "Piccolo",
+    "recorder": "Recorder",
+    "soprano-saxophone": "Soprano Saxophone",
+    "strings": "Strings",
+    "tenor-saxophone": "Tenor Saxophone",
+    "trombone": "Trombone",
+    "trumpet": "Trumpet",
+    "tuba": "Tuba",
+    "viola": "Viola",
+    "violin": "Violin",
+    "voice": "Voice",
+}
 
 INSTRUMENT_TAGS = {
     "bass": ("bass", "double-bass", "contrabass"),
@@ -108,6 +156,8 @@ _NON_PERSON_PATTERNS = tuple(
         r"^misc(?:ellaneous)?\b",
         r"\btranscribed by\b",
         r"\barranged by\b",
+        r"^arr(?:\.|gt\b)",
+        r"\brealizations by\b",
         r"\bharmonisation\b",
         r"\bharmonisatie\b",
     )
@@ -145,6 +195,11 @@ SOURCE_METADATA_FIELDS = (
     "license_url",
     "license_conflict",
     "is_best_unique_arrangement",
+    "subset:no_license_conflict",
+    "subset:all_valid",
+    "subset:deduplicated",
+    "subset:rated",
+    "subset:rated_deduplicated",
 )
 
 
@@ -167,6 +222,22 @@ def normalized_key(value: str | None) -> str:
     value = "".join(ch for ch in value if not unicodedata.combining(ch))
     value = value.casefold().replace("&", " and ")
     return " ".join(re.findall(r"[a-z0-9]+", value))
+
+
+def canonical_author_name(value: str | None) -> str | None:
+    """Убрать из имени годы жизни, opus и безопасные служебные префиксы."""
+    value = clean_value(value)
+    if not value:
+        return None
+    value = re.sub(r"^(?:music|composed)\s+by\s+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^by\s+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\([^)]*\d{4}[^)]*\)", "", value)
+    value = re.sub(r"\([^)]*\d{8}[^)]*\)", "", value)
+    value = re.sub(r"\s*c\.?\s*\d{4}\s+c\.?\s*\d{4}.*$", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s*\d{4}\s*[-–]\s*\d{4}.*$", "", value)
+    value = re.sub(r"\s*op(?:us)?\.?\s*\d.*$", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"[\s,.;:]+$", "", value)
+    return clean_value(value)
 
 
 def slug_key(value: str | None) -> str:
@@ -399,6 +470,13 @@ class CatalogSnapshot:
         self._author_index = result
         return self._author_index
 
+    def authors_by_wikidata(self) -> dict[str, list[CatalogAuthor]]:
+        result: dict[str, list[CatalogAuthor]] = defaultdict(list)
+        for author in self.authors:
+            if author.wikidata:
+                result[author.wikidata.casefold()].append(author)
+        return result
+
 
 def load_aliases(path: Path) -> dict[str, str | None]:
     if not path.is_file():
@@ -419,19 +497,53 @@ class AuthorResolution:
     raw_name: str | None
     canonical_name: str | None = None
     author: CatalogAuthor | None = None
+    profile: "AuthorProfile | None" = None
+
+
+@dataclass(frozen=True)
+class AuthorProfile:
+    canonical_name: str
+    wikidata: str | None = None
+    born: str | None = None
+    died: str | None = None
+    wikipedia: str | None = None
+
+
+def load_author_profiles(path: Path) -> dict[str, AuthorProfile]:
+    if not path.is_file():
+        return {}
+    profiles: dict[str, AuthorProfile] = {}
+    with path.open(encoding="utf-8", newline="") as file:
+        for row in csv.DictReader(file, delimiter="\t"):
+            canonical_name = clean_value(row.get("canonical_name"))
+            if not canonical_name:
+                continue
+            profile = AuthorProfile(
+                canonical_name=canonical_name,
+                wikidata=clean_value(row.get("wikidata")),
+                born=clean_value(row.get("born")),
+                died=clean_value(row.get("died")),
+                wikipedia=clean_value(row.get("wikipedia")),
+            )
+            profiles[normalized_key(canonical_name)] = profile
+    return profiles
 
 
 def resolve_author(
     raw_name: str | None,
     snapshot: CatalogSnapshot,
     aliases: dict[str, str | None],
+    profiles: dict[str, AuthorProfile] | None = None,
 ) -> AuthorResolution:
     raw_name = clean_value(raw_name)
     raw_key = normalized_key(raw_name)
     if not raw_name or is_non_person_author(raw_name):
         return AuthorResolution("ignored", raw_name)
 
-    canonical_name = aliases.get(raw_key, raw_name)
+    cleaned_name = canonical_author_name(raw_name)
+    canonical_name = aliases.get(raw_key)
+    if canonical_name is None and raw_key not in aliases:
+        canonical_name = aliases.get(normalized_key(cleaned_name), cleaned_name)
     if canonical_name is None:
         return AuthorResolution("ignored", raw_name)
 
@@ -441,12 +553,33 @@ def resolve_author(
         return AuthorResolution(status, raw_name, canonical_name, candidates[0])
     if len(candidates) > 1:
         return AuthorResolution("ambiguous", raw_name, canonical_name)
+    profile = (profiles or {}).get(normalized_key(canonical_name))
+    if profile is not None:
+        if profile.wikidata:
+            qid_candidates = snapshot.authors_by_wikidata().get(
+                profile.wikidata.casefold(), []
+            )
+            if len(qid_candidates) == 1:
+                return AuthorResolution(
+                    "alias-matched",
+                    raw_name,
+                    canonical_name,
+                    qid_candidates[0],
+                    profile,
+                )
+            if len(qid_candidates) > 1:
+                return AuthorResolution("ambiguous", raw_name, canonical_name, profile=profile)
+        return AuthorResolution("reviewed", raw_name, canonical_name, profile=profile)
     return AuthorResolution("unmatched", raw_name, canonical_name)
 
 
 @dataclass
 class Analysis:
     rows: int = 0
+    importable_rows: int = 0
+    skipped_by_author_policy: int = 0
+    accepted_authors: Counter = field(default_factory=Counter)
+    new_authors: Counter = field(default_factory=Counter)
     author_occurrences: Counter = field(default_factory=Counter)
     author_unique: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
     unmatched_authors: Counter = field(default_factory=Counter)
@@ -464,11 +597,28 @@ def analyze_rows(
     rows: Iterable[dict[str, str]],
     snapshot: CatalogSnapshot,
     aliases: dict[str, str | None],
+    profiles: dict[str, AuthorProfile] | None = None,
+    author_policy: str = "verified",
 ) -> Analysis:
     result = Analysis()
     for row in rows:
         result.rows += 1
-        resolution = resolve_author(row.get("composer_name"), snapshot, aliases)
+        resolution = resolve_author(row.get("composer_name"), snapshot, aliases, profiles)
+        if author_status_allowed(resolution.status, author_policy):
+            result.importable_rows += 1
+            accepted_name = (
+                resolution.author.name
+                if resolution.author is not None
+                else resolution.profile.canonical_name
+                if resolution.profile is not None
+                else resolution.canonical_name
+            )
+            if accepted_name:
+                result.accepted_authors[accepted_name] += 1
+            if resolution.status == "reviewed" and resolution.profile is not None:
+                result.new_authors[resolution.profile.canonical_name] += 1
+        else:
+            result.skipped_by_author_policy += 1
         result.author_occurrences[resolution.status] += 1
         if resolution.raw_name:
             result.author_unique[resolution.status].add(resolution.raw_name)
@@ -476,13 +626,20 @@ def analyze_rows(
             result.unmatched_authors[resolution.raw_name] += 1
         if resolution.status == "ambiguous" and resolution.raw_name:
             result.ambiguous_authors[resolution.raw_name] += 1
+        if not author_status_allowed(resolution.status, author_policy):
+            continue
 
         for value in split_metadata_values(row.get("genres")):
             slug = slug_key(value)
             target = result.matched_genres if slug in snapshot.genres else result.unmatched_genres
             target[slug] += 1
-            if slug in snapshot.tags:
-                result.matched_tags[slug] += 1
+            if slug in TAG_WHITELIST:
+                tag_target = (
+                    result.matched_tags
+                    if slug in snapshot.tags
+                    else result.unmatched_tags
+                )
+                tag_target[slug] += 1
 
         for value in split_metadata_values(row.get("tags")):
             slug = slug_key(value)
@@ -511,6 +668,10 @@ def print_analysis(
 ) -> None:
     print(f"DRY-RUN; subset={subset}; rows={analysis.rows}")
     print(
+        f"author policy: importable={analysis.importable_rows}; "
+        f"skipped={analysis.skipped_by_author_policy}"
+    )
+    print(
         "catalog: authors={authors}, tags={tags}, genres={genres}, instruments={instruments}".format(
             authors=len(snapshot.authors),
             tags=len(snapshot.tags),
@@ -519,7 +680,14 @@ def print_analysis(
         )
     )
     print("authors (score occurrences / unique raw values):")
-    for status in ("matched", "alias-matched", "ignored", "ambiguous", "unmatched"):
+    for status in (
+        "matched",
+        "alias-matched",
+        "reviewed",
+        "ignored",
+        "ambiguous",
+        "unmatched",
+    ):
         print(
             f"  {status}: {analysis.author_occurrences[status]} / "
             f"{len(analysis.author_unique.get(status, set()))}"
@@ -527,6 +695,17 @@ def print_analysis(
     if analysis.unmatched_authors:
         print(f"top {top} unmatched composers:")
         for name, count in analysis.unmatched_authors.most_common(top):
+            print(f"  {count:>6}  {name}")
+    if analysis.accepted_authors:
+        print(f"top {top} accepted composers:")
+        for name, count in analysis.accepted_authors.most_common(top):
+            print(f"  {count:>6}  {name}")
+    if analysis.new_authors:
+        print(
+            f"new reviewed author entities: {len(analysis.new_authors)} "
+            "(--create-authors required in apply mode)"
+        )
+        for name, count in analysis.new_authors.most_common(top):
             print(f"  {count:>6}  {name}")
     if analysis.ambiguous_authors:
         print(f"top {top} ambiguous composers:")
@@ -603,23 +782,53 @@ def _attach_cover(db, score, source_id: str) -> bool:
     return True
 
 
-def _db_author_resolution(raw_name, authors_by_key, aliases):
+def _db_author_resolution(
+    raw_name,
+    authors_by_key,
+    authors_by_wikidata,
+    aliases,
+    profiles,
+):
     raw_name = clean_value(raw_name)
     raw_key = normalized_key(raw_name)
     if not raw_name or is_non_person_author(raw_name):
-        return "ignored", raw_name, None
-    canonical = aliases.get(raw_key, raw_name)
+        return "ignored", raw_name, None, None
+    cleaned_name = canonical_author_name(raw_name)
+    canonical = aliases.get(raw_key)
+    if canonical is None and raw_key not in aliases:
+        canonical = aliases.get(normalized_key(cleaned_name), cleaned_name)
     if canonical is None:
-        return "ignored", raw_name, None
+        return "ignored", raw_name, None, None
     candidates = authors_by_key.get(normalized_key(canonical), [])
     if len(candidates) == 1:
-        return "matched", canonical, candidates[0]
+        return "matched", canonical, candidates[0], None
     if len(candidates) > 1:
-        return "ambiguous", canonical, None
-    return "unmatched", canonical, None
+        return "ambiguous", canonical, None, None
+    profile = profiles.get(normalized_key(canonical))
+    if profile is not None:
+        if profile.wikidata:
+            qid_candidates = authors_by_wikidata.get(profile.wikidata.casefold(), [])
+            if len(qid_candidates) == 1:
+                return "matched", canonical, qid_candidates[0], profile
+            if len(qid_candidates) > 1:
+                return "ambiguous", canonical, None, profile
+        return "reviewed", canonical, None, profile
+    return "unmatched", canonical, None, None
 
 
-def apply_import(args, aliases: dict[str, str | None]) -> None:
+def author_status_allowed(status: str, policy: str) -> bool:
+    if policy == "all":
+        return True
+    if status in {"matched", "alias-matched", "reviewed"}:
+        return True
+    return policy == "verified-or-anonymous" and status == "ignored"
+
+
+def apply_import(
+    args,
+    aliases: dict[str, str | None],
+    profiles: dict[str, AuthorProfile],
+) -> None:
     if args.attach_mxl and args.pdmx_dir is None:
         raise SystemExit("--attach-mxl requires --pdmx-dir")
 
@@ -645,8 +854,11 @@ def apply_import(args, aliases: dict[str, str | None]) -> None:
     try:
         authors = db.execute(select(Author).order_by(Author.id)).scalars().all()
         authors_by_key = defaultdict(list)
+        authors_by_wikidata = defaultdict(list)
         for author in authors:
             authors_by_key[normalized_key(author.name)].append(author)
+            if author.wikidata:
+                authors_by_wikidata[author.wikidata.casefold()].append(author)
 
         tags_by_slug = {tag.slug: tag for tag in db.execute(select(Tag)).scalars().all()}
         genres_by_slug = {
@@ -669,6 +881,20 @@ def apply_import(args, aliases: dict[str, str | None]) -> None:
 
         photographed_author_ids: set[int] = set()
         for row in iter_selected_rows(args.csv, args.subset, args.limit):
+            status, canonical, author, profile = _db_author_resolution(
+                row.get("composer_name"),
+                authors_by_key,
+                authors_by_wikidata,
+                aliases,
+                profiles,
+            )
+            if not author_status_allowed(status, args.author_policy):
+                counters["rows_skipped_by_author_policy"] += 1
+                continue
+            if status == "reviewed" and not args.create_authors:
+                counters["rows_skipped_missing_reviewed_author"] += 1
+                continue
+
             sid = pdmx_source_id(row)
             score = scores_by_source_id.get(sid)
             is_new = score is None
@@ -692,21 +918,24 @@ def apply_import(args, aliases: dict[str, str | None]) -> None:
             difficulty = map_difficulty(row.get("complexity"))
             score.difficulty = Difficulty(difficulty) if difficulty else None
 
-            status, canonical, author = _db_author_resolution(
-                row.get("composer_name"), authors_by_key, aliases
-            )
             counters[f"authors_{status}"] += 1
-            if author is None and status == "unmatched" and args.create_authors:
-                if looks_like_person(canonical):
+            if author is None and status == "reviewed" and args.create_authors:
+                if profile is not None and looks_like_person(profile.canonical_name):
                     author = Author(
-                        name=canonical[:255],
+                        name=profile.canonical_name[:255],
+                        born=profile.born,
+                        died=profile.died,
+                        wikidata=profile.wikidata,
+                        wikipedia=profile.wikipedia,
                         source=SourceType.pdmx,
-                        source_id=author_source_id(canonical),
+                        source_id=author_source_id(profile.canonical_name),
                         source_url=PDMX_RECORD_URL,
                     )
                     db.add(author)
                     db.flush()
-                    authors_by_key[normalized_key(canonical)].append(author)
+                    authors_by_key[normalized_key(profile.canonical_name)].append(author)
+                    if profile.wikidata:
+                        authors_by_wikidata[profile.wikidata.casefold()].append(author)
                     counters["authors_created"] += 1
             if author is not None:
                 score.author = author
@@ -723,9 +952,15 @@ def apply_import(args, aliases: dict[str, str | None]) -> None:
                 for value in split_metadata_values(row.get("tags"))
                 if slug_key(value) in TAG_WHITELIST
             }
-            desired_tags.update(slug for slug in desired_genres if slug in tags_by_slug)
+            desired_tags.update(slug for slug in desired_genres if slug in TAG_WHITELIST)
             for slug in desired_tags:
                 tag = tags_by_slug.get(slug)
+                if tag is None and args.create_terms and slug in TAG_DISPLAY_NAMES:
+                    tag = Tag(name=TAG_DISPLAY_NAMES[slug], slug=slug)
+                    db.add(tag)
+                    db.flush()
+                    tags_by_slug[slug] = tag
+                    counters["tags_created"] += 1
                 if tag is not None and tag not in score.tags:
                     score.tags.append(tag)
                     counters["tag_links_added"] += 1
@@ -733,6 +968,24 @@ def apply_import(args, aliases: dict[str, str | None]) -> None:
             resolved_instrument_slugs: set[str] = set()
             for candidates in instrument_candidate_groups(row):
                 slug = _existing_candidate(set(instruments_by_slug), candidates)
+                if slug is None and args.create_terms:
+                    slug = next(
+                        (
+                            candidate
+                            for candidate in candidates
+                            if candidate in INSTRUMENT_DISPLAY_NAMES
+                        ),
+                        None,
+                    )
+                    if slug is not None:
+                        instrument = Instrument(
+                            name=INSTRUMENT_DISPLAY_NAMES[slug],
+                            slug=slug,
+                        )
+                        db.add(instrument)
+                        db.flush()
+                        instruments_by_slug[slug] = instrument
+                        counters["instruments_created"] += 1
                 if not slug:
                     continue
                 resolved_instrument_slugs.add(slug)
@@ -806,10 +1059,20 @@ def parse_args() -> argparse.Namespace:
         help="JSON-выгрузка справочников прода для offline dry-run",
     )
     parser.add_argument("--aliases", type=Path, default=DEFAULT_ALIASES)
+    parser.add_argument("--author-profiles", type=Path, default=DEFAULT_AUTHOR_PROFILES)
     parser.add_argument(
         "--subset",
         choices=tuple(SUBSET_COLUMNS),
         default="rated-deduplicated",
+    )
+    parser.add_argument(
+        "--author-policy",
+        choices=("verified", "verified-or-anonymous", "all"),
+        default="verified",
+        help=(
+            "verified — только существующие/проверенные исторические авторы; "
+            "verified-or-anonymous — также anonymous/traditional; all — все строки"
+        ),
     )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--top", type=int, default=25, help="Размер top в dry-run отчёте")
@@ -817,7 +1080,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--create-authors",
         action="store_true",
-        help="Создавать только прошедших строгую проверку новых авторов",
+        help="Создавать только подтверждённых авторов из --author-profiles",
+    )
+    parser.add_argument(
+        "--create-terms",
+        action="store_true",
+        help="Создать отсутствующие термины только из безопасных whitelist-списков",
     )
     parser.add_argument("--pdmx-dir", type=Path, default=None)
     parser.add_argument("--attach-mxl", action="store_true")
@@ -848,8 +1116,9 @@ def main() -> None:
     if not args.csv.is_file():
         raise SystemExit(f"PDMX CSV not found: {args.csv}")
     aliases = load_aliases(args.aliases)
+    profiles = load_author_profiles(args.author_profiles)
     if args.apply:
-        apply_import(args, aliases)
+        apply_import(args, aliases, profiles)
         return
 
     if args.catalog_export.is_file():
@@ -865,6 +1134,8 @@ def main() -> None:
         iter_selected_rows(args.csv, args.subset, args.limit),
         snapshot,
         aliases,
+        profiles,
+        args.author_policy,
     )
     print_analysis(analysis, snapshot, args.subset, args.top)
 
