@@ -918,6 +918,10 @@ def apply_import(
             else:
                 counters["scores_updated"] += 1
 
+            if args.publish and not score.is_published:
+                score.is_published = True
+                counters["scores_published"] += 1
+
             title = clean_value(row.get("title")) or clean_value(row.get("song_name"))
             score.title = (title or "Untitled")[:512]
             score.source_url = PDMX_RECORD_URL
