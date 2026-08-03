@@ -7,15 +7,20 @@ name/title (исключён из форм), поэтому в админке е
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from sqladmin import Admin, BaseView, ModelView, expose
 from sqladmin.ajax import QueryAjaxModelLoader
 from sqladmin.authentication import AuthenticationBackend
+from sqladmin.fields import FileField as AdminFileField
+from sqladmin.widgets import FileInputWidget
 from sqlalchemy import select
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from wtforms import Field
+from wtforms import widgets as wtforms_widgets
 
 from api.db import SessionLocal
 
@@ -68,7 +73,7 @@ from api.db import engine
 
 from urllib.parse import quote, urlsplit
 
-from markupsafe import Markup
+from markupsafe import Markup, escape
 
 from api.storage import file_public_url
 
@@ -102,6 +107,59 @@ def _image_formatter(attr_name: str, size: int = 60):
         )
 
     return _fmt
+
+
+def _file_formatter(attr_name: str):
+    """Показать FileType-поле как ссылку на публичный /media URL."""
+
+    def _fmt(model, attribute):
+        src = _media_src(getattr(model, attr_name, None))
+        if not src:
+            return ""
+        safe_src = escape(src)
+        return Markup(
+            f'<a href="{safe_src}" target="_blank" rel="noopener">{safe_src}</a>'
+        )
+
+    return _fmt
+
+
+class PublicMediaFileInputWidget(FileInputWidget):
+    """FileInput SQLAdmin, который не раскрывает путь внутри контейнера."""
+
+    def __call__(self, field: Field, **kwargs: Any) -> Markup:
+        checkbox = Markup()
+        if not field.flags.required and field.data:
+            checkbox_id = f"{field.id}_checkbox"
+            safe_checkbox_id = escape(checkbox_id)
+            checkbox = Markup(
+                '<div class="form-check">'
+                f'<input class="form-check-input" type="checkbox" '
+                f'id="{safe_checkbox_id}" name="{safe_checkbox_id}">'
+                f'<label class="form-check-label" for="{safe_checkbox_id}">'
+                "Очистить</label></div>"
+            )
+
+        current = Markup()
+        if field.data:
+            src = _media_src(field.data)
+            if src:
+                safe_src = escape(src)
+                current = Markup(
+                    f'<p>Сейчас: <a href="{safe_src}" target="_blank" '
+                    f'rel="noopener">{safe_src}</a></p>'
+                )
+            else:
+                current = Markup(f"<p>Сейчас: {escape(Path(str(field.data)).name)}</p>")
+            # Существующее значение удовлетворяет required-валидатору.
+            field.flags.required = False
+
+        file_input = wtforms_widgets.FileInput.__call__(self, field, **kwargs)
+        return current + checkbox + file_input
+
+
+class PublicMediaFileField(AdminFileField):
+    widget = PublicMediaFileInputWidget()
 
 
 # Расширения, которые в архиве провалов имеет смысл показывать превьюшкой.
@@ -184,6 +242,7 @@ class AuthorAdmin(ModelView, model=Author):
     column_searchable_list = [Author.name]
     column_sortable_list = [Author.id, Author.name]
     form_excluded_columns = [Author.slug, Author.scores, Author.created_at]
+    form_overrides = {"photo": PublicMediaFileField}
     # Показываем фото как картинку, а не путь к файлу.
     column_formatters = {Author.photo: _image_formatter("photo")}
     column_formatters_detail = {Author.photo: _image_formatter("photo", size=240)}
@@ -217,6 +276,7 @@ class InstrumentAdmin(ModelView, model=Instrument):
     column_list = [Instrument.icon, Instrument.id, Instrument.name]
     column_searchable_list = [Instrument.name]
     form_excluded_columns = [Instrument.slug]
+    form_overrides = {"icon": PublicMediaFileField}
     column_formatters = {Instrument.icon: _image_formatter("icon")}
     column_formatters_detail = {
         Instrument.icon: _image_formatter("icon", size=240)
@@ -266,7 +326,13 @@ class ScoreAdmin(ModelView, model=Score):
     ]
     # Обложку показываем картинкой, а не путём к файлу.
     column_formatters = {Score.cover: _image_formatter("cover")}
-    column_formatters_detail = {Score.cover: _image_formatter("cover", size=320)}
+    column_formatters_detail = {
+        Score.cover: _image_formatter("cover", size=320),
+        Score.music_file: _file_formatter("music_file"),
+        Score.midi_file: _file_formatter("midi_file"),
+        Score.audio_file: _file_formatter("audio_file"),
+        Score.pdf_file: _file_formatter("pdf_file"),
+    }
     column_sortable_list = [
         Score.id,
         Score.title,
@@ -283,6 +349,13 @@ class ScoreAdmin(ModelView, model=Score):
         Score.created_at,
         Score.updated_at,
     ]
+    form_overrides = {
+        "cover": PublicMediaFileField,
+        "music_file": PublicMediaFileField,
+        "midi_file": PublicMediaFileField,
+        "audio_file": PublicMediaFileField,
+        "pdf_file": PublicMediaFileField,
+    }
     # Удобный выбор связей: ajax-поиск (select2) вместо громоздких списков.
     form_ajax_refs = {
         "author": {"fields": ("name",), "order_by": "name"},
@@ -486,6 +559,7 @@ class CollectionAdmin(ModelView, model=Collection):
         Collection.source_id,
         Collection.source_url,
     ]
+    form_overrides = {"cover": PublicMediaFileField}
     # Инлайн-добавление нот в подборку: множественный выбор с ajax-поиском по названию.
     form_ajax_refs = {
         "scores": {"fields": ("title",), "order_by": "title"}
