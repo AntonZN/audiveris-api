@@ -32,6 +32,12 @@ class InstrumentOut(TermOut):
     icon_url: str | None = None
 
 
+class PopularInstrumentOut(InstrumentOut):
+    """Инструмент и число опубликованных партитур с ним."""
+
+    scores_count: int
+
+
 class ScoreListItem(ApiModel):
     """Краткая карточка ноты для списков и подборок."""
 

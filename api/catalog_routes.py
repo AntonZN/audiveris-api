@@ -36,6 +36,7 @@ from api.catalog_schemas import (
     CollectionListItem,
     CollectionListResponse,
     InstrumentOut,
+    PopularInstrumentOut,
     RateRequest,
     ScoreDetail,
     ScoreListItem,
@@ -153,6 +154,53 @@ def list_instruments(db: Session = Depends(get_db)) -> list[InstrumentOut]:
     в фильтре `?instrument=<slug>`; `iconUrl` может быть null."""
     rows = db.execute(select(Instrument).order_by(Instrument.name)).scalars().all()
     return [_instrument_out(r) for r in rows]
+
+
+@router.get(
+    "/instruments/popular",
+    response_model=list[PopularInstrumentOut],
+    summary="Популярные инструменты с партитурами",
+)
+def list_popular_instruments(
+    limit: int = Query(
+        6,
+        ge=1,
+        le=20,
+        description="Сколько инструментов вернуть, 1..20 (по умолчанию 6)",
+    ),
+    db: Session = Depends(get_db),
+) -> list[PopularInstrumentOut]:
+    """Только инструменты, у которых есть хотя бы одна опубликованная
+    партитура. Сортировка по числу партитур по убыванию, затем по названию.
+
+    `scoresCount` можно показать в интерфейсе или использовать для аналитики.
+    Для фильтра каталога передавайте `slug` в
+    `GET /catalog/scores?instrument=<slug>`.
+    """
+    scores_count = func.count(Score.id).label("scores_count")
+    rows = db.execute(
+        select(Instrument, scores_count)
+        .join(
+            score_instruments,
+            score_instruments.c.instrument_id == Instrument.id,
+        )
+        .join(Score, Score.id == score_instruments.c.score_id)
+        .where(Score.is_published.is_(True))
+        .group_by(Instrument.id)
+        .order_by(scores_count.desc(), Instrument.name, Instrument.id)
+        .limit(limit)
+    ).all()
+
+    return [
+        PopularInstrumentOut(
+            id=instrument.id,
+            name=instrument.name,
+            slug=instrument.slug,
+            icon_url=file_public_url(instrument.icon),
+            scores_count=count,
+        )
+        for instrument, count in rows
+    ]
 
 
 @router.get("/authors", response_model=list[AuthorOut], summary="Список авторов")
