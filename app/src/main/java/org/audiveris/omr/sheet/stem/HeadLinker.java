@@ -1184,7 +1184,7 @@ public class HeadLinker
                         boolean stop = true;
                         final BeamGroupInter group = beam.getGroup();
                         for (int j = i + 1; j <= maxIndex; j++) {
-                            final StemItem ev2 = sb.get(i);
+                            final StemItem ev2 = sb.get(j);
                             if (ev2 instanceof LinkerItem
                                     && ((LinkerItem) ev2).linker instanceof BLinker) {
                                 final BLinker bl2 = (BLinker) ((LinkerItem) ev2).linker;
