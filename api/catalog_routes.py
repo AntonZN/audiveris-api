@@ -93,6 +93,7 @@ def _score_item(s: Score) -> ScoreListItem:
         instruments=[_instrument_out(i) for i in s.instruments],
         tags=[_term(tag) for tag in s.tags],
         cover_url=file_public_url(s.cover),
+        audio_url=file_public_url(s.audio_file),
         format=s.format.value if s.format else None,
         difficulty=s.difficulty.value if s.difficulty else None,
         style=s.style.name if s.style else None,
@@ -120,7 +121,6 @@ def _score_detail(s: Score) -> ScoreDetail:
         imslp_url=s.imslp_url,
         music_xml_url=file_public_url(s.music_file),
         midi_url=file_public_url(s.midi_file),
-        audio_url=file_public_url(s.audio_file),
         pdf_url=file_public_url(s.pdf_file),
         created_at=s.created_at,
     )

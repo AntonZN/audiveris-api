@@ -48,6 +48,7 @@ class ScoreListItem(ApiModel):
     instruments: list[InstrumentOut] = []
     tags: list[TermOut] = []
     cover_url: str | None = None
+    audio_url: str | None = None
     format: str | None = None
     difficulty: Difficulty | None = None
     style: str | None = None
@@ -73,7 +74,6 @@ class ScoreDetail(ScoreListItem):
     imslp_url: str | None = None
     music_xml_url: str | None = None
     midi_url: str | None = None
-    audio_url: str | None = None
     pdf_url: str | None = None
     created_at: datetime | None = None
 
