@@ -475,6 +475,12 @@ class ScoreAdmin(ModelView, model=Score):
         elif has_cover == "false":
             stmt = stmt.where(Score.cover.is_(None))
 
+        has_audio = request.query_params.get("has_audio")
+        if has_audio == "true":
+            stmt = stmt.where(Score.audio_file.is_not(None))
+        elif has_audio == "false":
+            stmt = stmt.where(Score.audio_file.is_(None))
+
         range_filters = (
             ("rating_min", Score.rating_avg, ">=", False),
             ("rating_max", Score.rating_avg, "<=", False),
