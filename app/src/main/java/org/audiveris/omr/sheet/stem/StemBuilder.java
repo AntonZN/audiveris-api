@@ -1045,39 +1045,52 @@ public class StemBuilder
                                    List<? extends StemLinker> targetLinkers,
                                    int maxStemProfile)
     {
-        if (startLinker.getSource().isVip()) {
-            logger.info("VIP {} retrieveAllItems stemProfile:{}", startLinker, maxStemProfile);
+        try {
+            if (startLinker.getSource().isVip()) {
+                logger.info("VIP {} retrieveAllItems stemProfile:{}", startLinker, maxStemProfile);
+            }
+
+            // Initial linker
+            final Glyph startGlyph = startLinker.getStump();
+            Rectangle startBox = null;
+
+            if (startGlyph != null) {
+                startBox = startGlyph.getBounds();
+            }
+
+            items.add(
+                    new HalfLinkerItem(
+                            startLinker,
+                            (startGlyph != null) ? getContrib(startBox) : 0));
+
+            // Include filtered seeds and stumps
+            items.addAll(filter(startBox, seeds, targetLinkers));
+
+            // Look for additional chunks built out of vertical sections found.
+            final List<Glyph> chunks = lookupChunks(seeds);
+
+            for (Glyph chunk : chunks) {
+                items.add(new GlyphItem(chunk, getContrib(chunk.getBounds())));
+            }
+
+            sortItems(items.subList(1, items.size()));
+
+            if (saveConnections() && startLinker.getSource().isVip()) {
+                saveConnection(startLinker, startGlyph, chunks);
+            }
+
+            insertGapEvents(maxStemProfile);
+
+            logger.debug("{}", this);
+        } catch (Exception ex) {
+            logger.warn("StemBuilder. Error in retrieveAllItems {}", ex.getMessage(), ex);
+            if (!seeds.isEmpty()) {
+                logger.warn("Related {} seeds: " + Glyphs.ids(seeds), seeds.size());
+            } else {
+                logger.warn("No related seeds");
+            }
+            items.clear();
         }
-
-        // Initial linker
-        final Glyph startGlyph = startLinker.getStump();
-        Rectangle startBox = null;
-
-        if (startGlyph != null) {
-            startBox = startGlyph.getBounds();
-        }
-
-        items.add(new HalfLinkerItem(startLinker, (startGlyph != null) ? getContrib(startBox) : 0));
-
-        // Include filtered seeds and stumps
-        items.addAll(filter(startBox, seeds, targetLinkers));
-
-        // Look for additional chunks built out of vertical sections found.
-        final List<Glyph> chunks = lookupChunks(seeds);
-
-        for (Glyph chunk : chunks) {
-            items.add(new GlyphItem(chunk, getContrib(chunk.getBounds())));
-        }
-
-        sortItems(items.subList(1, items.size()));
-
-        if (saveConnections() && startLinker.getSource().isVip()) {
-            saveConnection(startLinker, startGlyph, chunks);
-        }
-
-        insertGapEvents(maxStemProfile);
-
-        logger.debug("{}", this);
     }
 
     //-----------------//
@@ -1141,15 +1154,10 @@ public class StemBuilder
      */
     private void sortItems (List<? extends StemItem> list)
     {
-        //        logger.info("StemBuilder {}", this);
-        //        for (StemItem item : list) {
-        //            logger.info("   {}", item);
-        //        }
         Collections.sort(
                 list,
                 (se1,
-                 se2) ->
-                {
+                 se2) -> {
                     // Linker pairs are sorted on their refPt ordinate
                     if (se1 instanceof HalfLinkerItem hl1) {
                         if (se2 instanceof HalfLinkerItem hl2) {
