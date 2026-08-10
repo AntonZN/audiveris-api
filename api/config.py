@@ -76,6 +76,20 @@ class Settings(BaseSettings):
     # раздавал тот же /media/* (Caddy -> /storage/out).
     catalog_media_dir: str = "/storage/out/catalog"
 
+    # --- MP3-превью каталога ---
+    # MusicXML -> MIDI (verovio) -> WAV (FluidSynth + GM SoundFont) -> MP3
+    # (ffmpeg). Все этапы запускаются в отдельных процессах с общим таймаутом на
+    # каждый этап; результат сохраняется в Score.audio_file.
+    audio_preview_duration_seconds: float = 20.0
+    audio_preview_bitrate_kbps: int = 128
+    audio_preview_sample_rate: int = 44100
+    audio_preview_fade_out_seconds: float = 1.5
+    audio_preview_loudness_lufs: float = -16.0
+    audio_preview_timeout_seconds: int = 120
+    audio_preview_soundfont_path: str = "/usr/share/sounds/sf2/FluidR3_GM.sf2"
+    audio_preview_fluidsynth_cmd: str = "fluidsynth"
+    audio_preview_ffmpeg_cmd: str = "ffmpeg"
+
     # Директория «архива провалов»: входные файлы задач, которые не удалось
     # обработать, НЕ удаляются вместе с временным input_dir, а копируются сюда и
     # заводятся строкой в таблице failed_files (см. api/failures.py) — чтобы позже
