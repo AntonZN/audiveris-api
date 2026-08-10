@@ -788,6 +788,22 @@ def _attach_cover(db, score, source_id: str) -> bool:
     return True
 
 
+def _attach_audio_preview(db, score, source_id: str) -> bool:
+    if score.audio_file or not score.music_file:
+        return False
+    from api.audio_preview import render_audio_preview
+
+    db.refresh(score, attribute_names=["music_file"])
+    music_path = Path(str(score.music_file))
+    if not music_path.is_file():
+        return False
+    mp3 = render_audio_preview(music_path)
+    if not mp3:
+        return False
+    score.audio_file = _BytesUpload(mp3, f"pdmx-{source_id}-preview.mp3")
+    return True
+
+
 def _db_author_resolution(
     raw_name,
     authors_by_key,
@@ -1028,6 +1044,8 @@ def apply_import(
                     upload.close()
             if args.covers and _attach_cover(db, score, sid):
                 counters["covers_created"] += 1
+            if args.audio_previews and _attach_audio_preview(db, score, sid):
+                counters["audio_previews_created"] += 1
 
             if (
                 args.photos
@@ -1107,6 +1125,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pdmx-dir", type=Path, default=None)
     parser.add_argument("--attach-mxl", action="store_true")
     parser.add_argument("--covers", action="store_true")
+    parser.add_argument(
+        "--audio-previews",
+        action="store_true",
+        help="Сгенерировать отсутствующие короткие MP3-превью из music_file",
+    )
     parser.add_argument("--photos", action="store_true")
     parser.add_argument(
         "--publish",
@@ -1125,6 +1148,11 @@ def parse_args() -> argparse.Namespace:
         # Обложки могут быть дозалиты для уже импортированных MXL; это лишь
         # предупреждение для самого частого ошибочного запуска.
         print("Note: --covers without --attach-mxl processes only existing music_file values")
+    if args.audio_previews and not args.attach_mxl and args.pdmx_dir is not None:
+        print(
+            "Note: --audio-previews without --attach-mxl processes only existing "
+            "music_file values"
+        )
     return args
 
 

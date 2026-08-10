@@ -111,3 +111,8 @@ data/tasks
 .env
 Caddyfile
 preprocessing
+
+# Local PDMX import data
+/PDMX.csv
+/pdmx_prod_catalog.json
+/PDMX/

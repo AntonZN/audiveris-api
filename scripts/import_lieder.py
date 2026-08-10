@@ -70,6 +70,7 @@ from api.catalog_models import (  # noqa: E402
     Score,
     SourceType,
 )
+from api.audio_preview import render_audio_preview  # noqa: E402
 from api.db import SessionLocal, init_db  # noqa: E402
 from api.preview import render_cover_png  # noqa: E402
 from api.storage import storage  # noqa: E402
@@ -251,6 +252,23 @@ def _generate_cover(db: Session, score: Score) -> bool:
     return True
 
 
+def _generate_audio_preview(db: Session, score: Score) -> bool:
+    """Сгенерировать короткий MP3 из привязанного .mxl, если его ещё нет."""
+    if score.audio_file:
+        return False
+    db.refresh(score, attribute_names=["music_file"])
+    if not score.music_file:
+        return False
+    music_path = Path(str(score.music_file))
+    if not music_path.is_file():
+        return False
+    mp3 = render_audio_preview(music_path)
+    if not mp3:
+        return False
+    score.audio_file = _BytesUpload(mp3, f"lieder-{score.source_id}-preview.mp3")
+    return True
+
+
 def _attach_media(score: Score, score_dir: Path) -> list[_LocalUpload]:
     """Привязать сконвертированные файлы из локального каталога ноты.
 
@@ -279,6 +297,7 @@ def run(
     limit: int | None,
     download_mxl: bool,
     generate_cover: bool,
+    generate_audio: bool = False,
     sets_mode: str = "none",
     download_photos: bool = True,
 ) -> None:
@@ -348,6 +367,7 @@ def run(
         imported = 0
         media_attached = 0
         covers_made = 0
+        audio_previews_made = 0
         for row in rows:
             sid = row["id"]
             score = _get_by_source(db, Score, sid) or Score(source=SOURCE, source_id=sid)
@@ -387,6 +407,11 @@ def run(
             if generate_cover and _generate_cover(db, score):
                 covers_made += 1
 
+            # Аудио опционально: массовый импорт не должен неожиданно становиться
+            # тяжёлым. Готовый audio_file из локального клона не перезаписывается.
+            if generate_audio and _generate_audio_preview(db, score):
+                audio_previews_made += 1
+
             # Привязка к подборке (sets) с сохранением порядка
             col = collection_by_src.get(set_id)
             if col is not None:
@@ -410,7 +435,8 @@ def run(
         print(
             f"Готово: авторов={len(author_by_src)} (фото={photos_made}) "
             f"подборок={len(collection_by_src)} (пропущено sets={skipped_sets}) "
-            f"нот={imported} .mxl/медиа привязано={media_attached} обложек={covers_made}"
+            f"нот={imported} .mxl/медиа привязано={media_attached} обложек={covers_made} "
+            f"аудиопревью={audio_previews_made}"
         )
     finally:
         client.close()
@@ -437,6 +463,11 @@ def main() -> None:
         help="Не генерировать обложки из .mxl через verovio.",
     )
     parser.add_argument(
+        "--audio-previews",
+        action="store_true",
+        help="Сгенерировать отсутствующие короткие MP3-превью из .mxl.",
+    )
+    parser.add_argument(
         "--no-photos",
         action="store_true",
         help="Не скачивать фото авторов с Wikimedia/Wikidata.",
@@ -456,6 +487,7 @@ def main() -> None:
         args.limit,
         download_mxl=not args.no_mxl,
         generate_cover=not args.no_cover,
+        generate_audio=args.audio_previews,
         sets_mode=args.sets,
         download_photos=not args.no_photos,
     )

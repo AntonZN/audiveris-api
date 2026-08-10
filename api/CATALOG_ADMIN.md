@@ -37,6 +37,13 @@ docker compose up -d --build
 | `POSTGRES_USER/PASSWORD/DB` | креды Postgres | `catalog` |
 | `DATABASE_URL` | строка подключения | `postgresql+psycopg2://catalog:catalog@postgres:5432/catalog` |
 | `CATALOG_MEDIA_DIR` | куда складывать медиа каталога | `/storage/out/catalog` |
+| `AUDIO_PREVIEW_DURATION_SECONDS` | длительность MP3-превью | `20` |
+| `AUDIO_PREVIEW_BITRATE_KBPS` | битрейт MP3 | `128` |
+| `AUDIO_PREVIEW_SAMPLE_RATE` | частота дискретизации | `44100` |
+| `AUDIO_PREVIEW_FADE_OUT_SECONDS` | длительность fade-out | `1.5` |
+| `AUDIO_PREVIEW_LOUDNESS_LUFS` | целевая громкость | `-16` |
+| `AUDIO_PREVIEW_TIMEOUT_SECONDS` | таймаут каждого этапа рендера | `120` |
+| `AUDIO_PREVIEW_SOUNDFONT_PATH` | General MIDI SoundFont для FluidSynth | `/usr/share/sounds/sf2/FluidR3_GM.sf2` |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | логин в админку | `admin` / `admin` |
 | `ADMIN_SECRET` | секрет session-cookie | `change-me-in-production` |
 
@@ -101,6 +108,9 @@ docker compose exec audiveris-api python scripts/import_lieder.py --limit 50 --n
 # Без генерации обложек (но с .mxl):
 docker compose exec audiveris-api python scripts/import_lieder.py --limit 50 --no-cover
 
+# Сгенерировать также короткие MP3-превью:
+docker compose exec audiveris-api python scripts/import_lieder.py --limit 50 --audio-previews
+
 # Без фото авторов:
 docker compose exec audiveris-api python scripts/import_lieder.py --limit 50 --no-photos
 
@@ -121,6 +131,33 @@ docker compose exec audiveris-api python scripts/import_lieder.py --repo-dir /pa
 > Обложка рендерится модулем `api/preview.py` (verovio в отдельном процессе —
 > он может сегфолтить на кривом MusicXML; cairosvg растеризует SVG в PNG). Этот же
 > модуль можно использовать для авто-обложки при ручной загрузке `.mxl` в админке.
+
+## MP3-превью из MusicXML
+
+`api/audio_preview.py` генерирует короткое аудиопревью по конвейеру
+MusicXML/MXL → MIDI (verovio) → WAV (FluidSynth + FluidR3 GM SoundFont) → MP3
+(ffmpeg). Начальная тишина убирается, громкость нормализуется, в конце добавляется
+fade-out. Каждый этап изолирован отдельным процессом и ограничен таймаутом.
+
+Догенерировать отсутствующие превью для уже заполненного каталога:
+
+```bash
+# Сначала пилот на 50 нотах:
+docker compose exec audiveris-api \
+  python scripts/generate_audio_previews.py --limit 50
+
+# Затем все оставшиеся; существующие audio_file пропускаются:
+docker compose exec audiveris-api \
+  python scripts/generate_audio_previews.py
+
+# Разовая другая длительность:
+docker compose exec audiveris-api \
+  python scripts/generate_audio_previews.py --duration 30 --limit 50
+```
+
+Для PDMX генерация подключается явным флагом `--audio-previews` вместе с
+`--attach-mxl` или отдельно для уже привязанных `music_file`. Готовый MP3 пишется
+в существующее поле `Score.audio_file` и сразу появляется в API как `audioUrl`.
 
 ## Очистка каталога (для тестов)
 
@@ -158,9 +195,9 @@ docker compose exec audiveris-api python scripts/reset_catalog.py --yes
 - **Список событий**: «Активность» → «Статистика OMR» — сырые события (read-only,
   сортировка по дате, поиск по `task_id`).
 
-> MIDI/MP3/PDF в репозитории нет — только `.mxl`. Если нужны midi/mp3 для
-> прослушивания, сконвертируйте локальный клон MuseScore'ом
-> (`mscore -j data/corpus_conversion.json` + свои таргеты) и импортируйте с `--repo-dir`.
+> MIDI/MP3/PDF в исходном репозитории Lieder нет — только `.mxl`. MP3 теперь можно
+> сгенерировать сервером через `--audio-previews` или отдельным backfill-скриптом;
+> готовые локальные `.mid/.mp3/.pdf` по-прежнему можно импортировать с `--repo-dir`.
 
 > Mutopia отдаёт LilyPond/PDF/MIDI без MusicXML — её можно импортировать отдельным
 > скриптом как источник PDF/MIDI (не редактируемого MusicXML).

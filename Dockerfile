@@ -19,6 +19,9 @@ FROM eclipse-temurin:25-jdk-noble
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         fontconfig \
+        ffmpeg \
+        fluid-soundfont-gm \
+        fluidsynth \
         libfreetype6 \
         libcairo2 \
         libgl1 \

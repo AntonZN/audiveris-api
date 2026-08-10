@@ -17,6 +17,14 @@ POSTGRES_PASSWORD=catalog
 POSTGRES_DB=catalog
 DATABASE_URL=postgresql+psycopg2://catalog:catalog@postgres:5432/catalog
 CATALOG_MEDIA_DIR=/storage/out/catalog
+# MP3-превью: MusicXML -> Verovio MIDI -> FluidSynth -> FFmpeg.
+AUDIO_PREVIEW_DURATION_SECONDS=20
+AUDIO_PREVIEW_BITRATE_KBPS=128
+AUDIO_PREVIEW_SAMPLE_RATE=44100
+AUDIO_PREVIEW_FADE_OUT_SECONDS=1.5
+AUDIO_PREVIEW_LOUDNESS_LUFS=-16
+AUDIO_PREVIEW_TIMEOUT_SECONDS=120
+AUDIO_PREVIEW_SOUNDFONT_PATH=/usr/share/sounds/sf2/FluidR3_GM.sf2
 # Логин в админку (/admin). Обязательно поменяйте в проде.
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=admin
