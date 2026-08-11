@@ -1084,12 +1084,9 @@ public class StemBuilder
             logger.debug("{}", this);
         } catch (Exception ex) {
             logger.warn("StemBuilder. Error in retrieveAllItems {}", ex.getMessage(), ex);
-            if (!seeds.isEmpty()) {
-                logger.warn("Related {} seeds: " + Glyphs.ids(seeds), seeds.size());
-            } else {
-                logger.warn("No related seeds");
-            }
-            items.clear();
+            logger.warn("StemBuilder. {}", startLinker);
+
+            items.clear(); // Safer!
         }
     }
 
