@@ -73,6 +73,7 @@ import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -1151,24 +1152,47 @@ public class StemBuilder
      */
     private void sortItems (List<? extends StemItem> list)
     {
-        Collections.sort(
-                list,
-                (se1,
-                 se2) -> {
-                    // Linker pairs are sorted on their refPt ordinate
-                    if (se1 instanceof HalfLinkerItem hl1) {
-                        if (se2 instanceof HalfLinkerItem hl2) {
-                            final Point2D p1 = hl1.linker.getReferencePoint();
-                            final Point2D p2 = hl2.linker.getReferencePoint();
-                            return yDir * Double.compare(p1.getY(), p2.getY());
-                        }
-                    }
+        Collections.sort(list, ordinateComparator(yDir));
+    }
 
-                    // Others are sorted on their line starting ordinate
-                    return (yDir > 0) //
-                            ? Double.compare(se1.line.getY1(), se2.line.getY1())
-                            : Double.compare(se2.line.getY2(), se1.line.getY2());
-                });
+    //--------------------//
+    // ordinateComparator //
+    //--------------------//
+    /**
+     * Report the comparator used to sort stem items along the provided yDir.
+     * <p>
+     * Each item is compared via a single ordinate key, whatever the other item in the pair,
+     * so that the comparator is transitive as required by the sorting contract.
+     *
+     * @param yDir the desired vertical direction
+     * @return the item comparator
+     */
+    static Comparator<StemItem> ordinateComparator (int yDir)
+    {
+        return (se1,
+                se2) -> yDir * Double.compare(ordinateKeyOf(se1, yDir), ordinateKeyOf(se2, yDir));
+    }
+
+    //---------------//
+    // ordinateKeyOf //
+    //---------------//
+    /**
+     * Report the ordinate key used to sort the provided item along yDir.
+     *
+     * @param item the item to evaluate
+     * @param yDir the desired vertical direction
+     * @return the item sorting ordinate
+     */
+    private static double ordinateKeyOf (StemItem item,
+                                         int yDir)
+    {
+        // A half linker item is located on its refPt ordinate
+        if (item instanceof HalfLinkerItem hl) {
+            return hl.linker.getReferencePoint().getY();
+        }
+
+        // Others are located on their line starting ordinate (line is oriented top down)
+        return (yDir > 0) ? item.line.getY1() : item.line.getY2();
     }
 
     //----------//
