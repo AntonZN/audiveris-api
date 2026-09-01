@@ -270,7 +270,8 @@ def list_collections(
 ) -> CollectionListResponse:
     """Опубликованные подборки (кураторские списки нот), в порядке `position`.
     `?featured=true` — только избранные, `?has_cover=true` — только подборки с
-    обложкой. Ответ использует пагинацию `{ items, total, page, pageSize }`;
+    обложкой. В счётчик состава входят только опубликованные ноты с обложкой и
+    MusicXML/MXL. Ответ использует пагинацию `{ items, total, page, pageSize }`;
     за составом идите в `GET /catalog/collections/{id}`."""
     stmt = select(Collection).where(Collection.is_published.is_(True))
     if featured is not None:
@@ -287,7 +288,26 @@ def list_collections(
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
-    rows = db.execute(stmt.options(selectinload(Collection.items))).scalars().all()
+    rows = db.execute(stmt).scalars().all()
+
+    # Считаем только те ноты, которые реально можно показать в подборке.
+    # Иначе `items_count` не совпадал бы с составом detail-endpoint.
+    items_counts: dict[int, int] = {}
+    if rows:
+        items_counts = dict(
+            db.execute(
+                select(CollectionItem.collection_id, func.count(Score.id))
+                .join(Score, Score.id == CollectionItem.score_id)
+                .where(
+                    CollectionItem.collection_id.in_([c.id for c in rows]),
+                    Score.is_published.is_(True),
+                    Score.cover.is_not(None),
+                    Score.music_file.is_not(None),
+                )
+                .group_by(CollectionItem.collection_id)
+            ).all()
+        )
+
     return CollectionListResponse(
         items=[
             CollectionListItem(
@@ -297,7 +317,7 @@ def list_collections(
                 description=c.description,
                 cover_url=file_public_url(c.cover),
                 is_featured=c.is_featured,
-                items_count=len(c.items),
+                items_count=items_counts.get(c.id, 0),
             )
             for c in rows
         ],
@@ -334,9 +354,13 @@ def get_collection(
     if not c:
         raise HTTPException(status_code=404, detail="Collection not found")
 
+    # Неполные ноты не должны попадать в публичный состав подборки: карточке
+    # нужны и обложка, и доступный MusicXML/MXL для открытия партитуры.
     score_filters = (
         CollectionItem.collection_id == c.id,
         Score.is_published.is_(True),
+        Score.cover.is_not(None),
+        Score.music_file.is_not(None),
     )
     total = db.execute(
         select(func.count())
