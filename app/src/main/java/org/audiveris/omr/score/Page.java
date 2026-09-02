@@ -196,9 +196,23 @@ public class Page
             // Compute greatest duration divisor for the page
             Rational[] durationArray = durations.toArray(new Rational[durations.size()]);
             Rational divisor = Rational.gcd(durationArray);
-            logger.debug("durations={} divisor={}", Arrays.deepToString(durationArray), divisor);
 
-            return divisor.den;
+            int chosen = divisor.den;
+
+            // We must make sure that a quarter can be expressed with the chosen division value
+            // Because the MusicXML division value is stated as the duration of a quarter (1/4)
+            while (chosen < 4) {
+                chosen = 4 * chosen;
+            }
+
+            logger.debug(
+                    "{} durations={} gcd={} divisions={}",
+                    this,
+                    Arrays.deepToString(durationArray),
+                    divisor,
+                    chosen);
+
+            return chosen;
         } catch (Exception ex) {
             logger.warn(getClass().getSimpleName() + " Error visiting " + this, ex);
 
@@ -319,6 +333,7 @@ public class Page
     {
         if (durationDivisor == null) {
             durationDivisor = computeDurationDivisor();
+            logger.debug("{} durationDivisor: {}", this, durationDivisor);
         }
 
         return durationDivisor;
@@ -701,11 +716,15 @@ public class Page
      * the page.
      *
      * @param value the raw duration
-     * @return the simple duration expression, in the param of proper divisions
+     * @return the simple duration expression, stated in number of proper divisions
      */
     public int simpleDurationOf (Rational value)
     {
-        return value.num * (getDurationDivisor() / value.den);
+        final int divisions = getDurationDivisor();
+        final int duration = value.num * (divisions / value.den);
+        logger.trace("value: {} duration: {} divisions: {}", value, duration, divisions);
+
+        return duration;
     }
 
     //----------//
