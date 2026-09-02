@@ -301,6 +301,7 @@ def list_collections(
                 .where(
                     CollectionItem.collection_id.in_([c.id for c in rows]),
                     Score.is_published.is_(True),
+                    Score.is_broken.is_(False),
                     Score.cover.is_not(None),
                     Score.music_file.is_not(None),
                 )
@@ -345,8 +346,9 @@ def get_collection(
 ) -> CollectionDetail:
     """Подборка по `id` вместе с её нотами (`scores`, краткие карточки) в
     заданном порядке. Поддерживает пагинацию через `page` и `page_size`;
-    ответ содержит `total`, `page`, `pageSize`. Только опубликованные ноты.
-    404, если подборки нет."""
+    ответ содержит `total`, `page`, `pageSize`. Возвращаются только
+    опубликованные, неповреждённые ноты с обложкой и MusicXML/MXL. 404, если
+    подборки нет."""
     c = db.execute(
         select(Collection)
         .where(Collection.id == collection_id, Collection.is_published.is_(True))
@@ -359,6 +361,7 @@ def get_collection(
     score_filters = (
         CollectionItem.collection_id == c.id,
         Score.is_published.is_(True),
+        Score.is_broken.is_(False),
         Score.cover.is_not(None),
         Score.music_file.is_not(None),
     )

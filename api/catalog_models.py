@@ -231,6 +231,12 @@ class Score(Base):
     plays_count: Mapped[int] = mapped_column(Integer, default=0)
 
     is_published: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    is_broken: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        index=True,
+    )
 
     # Происхождение (импорт)
     source: Mapped[SourceType] = mapped_column(

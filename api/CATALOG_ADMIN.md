@@ -53,7 +53,7 @@ docker compose up -d --build
   (solo/ensemble/orchestra/…), `difficulty` (`1`/`2`/`3` в API), `genres[]`, `instruments[]`,
   `opus`, `year`, `lyricist`, `license`, файлы `cover`/`music_file`/`midi_file`/
   `audio_file`/`pdf_file`, агрегаты `rating_avg`/`rating_count`/`plays_count`,
-  `is_published`, поля импорта `source`/`source_id`/`source_url`.
+  `is_published`, `is_broken`, поля импорта `source`/`source_id`/`source_url`.
 - **Collection** (подборка) + **CollectionItem** (упорядоченный состав). Связь
   «нота ↔ подборка» редактируется с обеих сторон: на странице подборки — поле «Ноты»,
   на странице ноты — поле «Подборки» (оба — ajax-поиск select2, первые 10 при фокусе).
@@ -162,6 +162,20 @@ docker compose exec audiveris-api \
 в существующее поле `Score.audio_file` и сразу появляется в API как `audioUrl`.
 В списке нот админки фильтр «Аудиопревью» позволяет показать только записи с MP3
 или только записи, для которых превью ещё не создано.
+
+## Проверка битых MusicXML
+
+Проверить все партитуры через Verovio `renderToMIDI` и отметить проблемные:
+
+```bash
+docker compose exec audiveris-api \
+  python scripts/check_broken_scores.py
+```
+
+Каждая проверка изолирована в дочернем процессе и ограничена 15 секундами.
+Партитуры без `music_file`, с отсутствующим файлом, с таймаутом или падением
+Verovio получают `is_broken=true`. Повторный запуск сбрасывает флаг для тех,
+которые снова проходят проверку.
 
 ## Очистка каталога (для тестов)
 
