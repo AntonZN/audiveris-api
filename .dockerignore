@@ -8,3 +8,14 @@ api/.venv
 PDMX.csv
 pdmx_prod_catalog.json
 PDMX
+
+# Архивы тестовых партитур: 190+ МБ, в образе не нужны, а в контексте сборки
+# замедляют каждый build (builder-стадия копирует корень целиком).
+fail_prod_files
+success_prod_files
+output
+zeus_eval
+.venv
+.cocoindex_code
+**/__pycache__
+.pytest_cache

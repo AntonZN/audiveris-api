@@ -12,8 +12,9 @@ from PIL import Image, ImageEnhance
 
 from api.config import settings
 from api.exceptions import LowInterlineError, ProcessingError
+from api import omr_bridge
 from api.homr_service import homr_service, is_photo
-from api.models import FileResult
+from api.models import FileResult, ScoreTexts
 from api.presets import Preset, get_preset_args
 
 logger = logging.getLogger(__name__)
@@ -221,6 +222,19 @@ class AudiverisService:
             return enhance_for_omr(self._convert_webp_to_jpg(input_path))
         return self._preprocess_image(input_path)
 
+    @staticmethod
+    def _tempo_candidates(texts: ScoreTexts) -> list[str]:
+        """Тексты, где может стоять метрономная отметка, в порядке правдоподобия.
+
+        Заголовок первый: у homr фильтр `is_tempo_marking` пропускает в заголовок
+        всё, в чём есть четыре буквы, поэтому «Allegro ♩=120» приезжает целиком.
+        Слоги и имена партий не смотрим — там темпа не бывает, а числа бывают.
+        """
+        candidates = [texts.title or "", texts.composer or ""]
+        candidates += list(texts.credits or [])
+        candidates += [d.text for d in (texts.directions or []) if d.text]
+        return [text for text in candidates if text]
+
     def _build_success_result(
         self,
         output_path: Path,
@@ -231,22 +245,27 @@ class AudiverisService:
         Политика «fix-on-failure» (фикс — только когда без него файл непригоден):
           1) `collect_bpm` + `collect_texts` — выдёргиваем темп и распознанный
              текст из сырого .mxl ДО стрипа (мобиле они нужны как метаданные,
-             а в xml-плеере всё равно не рисуются);
+             а в xml-плеере всё равно не рисуются). Темпа в файле нет — ищем
+             метрономную отметку в самом тексте (`bpm_from_texts`): homr её из
+             картинки не пишет никогда, а отдельного движка ради одного числа
+             мы больше не гоняем;
           2) `_strip_text_xml` — выкидываем текст и утечки путей плюс чиним
              структурные дефекты XML, на которых спотыкаются music21/verovio:
              <divisions>0</divisions> и клефы с <line> вне [1..5] (это и есть
              «line number must be 1-5» / «Could not find clef C-1»). .mxl на месте;
           3) `analyze_only` — music21 ТОЛЬКО парсит и считает analysis
              (тональность/размеры/темпы/инструменты);
-          4) `verovio_check.midi_ok` — сначала проверяем прямо выход Audiveris
+          4) `verovio_check.renders_ok` — сначала проверяем прямо выход движка
              (быстрый путь: на здоровых файлах тяжёлый round-trip не нужен). Если
-             он НЕ собирается в MIDI, пробуем `repair` (music21 round-trip: parse →
+             verovio его не принимает, пробуем `repair` (music21 round-trip: parse →
              strip → rewrite, убирает beam-on-chord и пр.) и проверяем ещё раз.
-             Получилось — отдаём починенный файл (`fixed=True`); не помогло —
-             ProcessingError.
+             Получилось — отдаём починенный файл (`fixed=True`);
+          5) `salvage` — если не помог и `repair`, вместо провала задачи
+             локализуем проблемное место бисекцией и выбрасываем его. Клиенту
+             уходит НЕПОЛНАЯ партитура с `dropped_measures > 0` — это лучше, чем
+             ничего. Не удалось и это — ProcessingError.
         """
         from api.analysis import _strip_text_xml, analyze_only, collect_bpm, collect_texts
-        from api.models import ScoreTexts
 
         bpm: int | None = None
         try:
@@ -259,6 +278,19 @@ class AudiverisService:
             texts = ScoreTexts.model_validate(collect_texts(output_path))
         except Exception:
             logger.exception("text collection failed for %s", output_path)
+
+        # Темпа в файле нет — поищем его в тексте, который уже распознан. Отметка
+        # часто срослась с заголовком («Allegro ♩ = 120») или лежит в ремарке. Это
+        # даром, а альтернатива — отдельный запуск Audiveris ради одного числа.
+        if bpm is None and texts is not None:
+            try:
+                from api.analysis import bpm_from_texts, inject_bpm
+
+                bpm = bpm_from_texts(self._tempo_candidates(texts))
+                if bpm is not None:
+                    inject_bpm(output_path, bpm)
+            except Exception:
+                logger.exception("bpm from texts failed for %s", output_path)
 
         try:
             _strip_text_xml(output_path)
@@ -287,17 +319,18 @@ class AudiverisService:
                 )
                 raise ProcessingError(detail, log_path=log_path)
 
-        # verovio renderToMIDI — это «контракт» с мобильным клиентом: ровно тот же
-        # вызов, что у него внутри. Проверяем СРАЗУ то, что отдал Audiveris —
-        # на здоровых файлах music21-round-trip не нужен, не тратим его.
-        from api.verovio_check import midi_ok
+        # verovio — это «контракт» с мобильным клиентом: те же вызовы, что у него
+        # внутри (загрузка + MIDI + вёрстка страницы). Проверяем СРАЗУ то, что
+        # отдал движок — на здоровых файлах music21-round-trip не нужен.
+        from api.verovio_check import renders_ok
 
         result_path = output_path
         fixed = False
+        dropped_measures = 0
 
-        if not midi_ok(result_path):
-            # Выход не собирается в MIDI (частые причины: <beam> на ноте-члене
-            # аккорда → segfault verovio, разбалансированные лиги, остаточные
+        if not renders_ok(result_path):
+            # Выход не принимается verovio (частые причины: <beam> на ноте-члене
+            # аккорда → segfault, разбалансированные лиги, остаточные
             # клеф/divisions-дефекты). Пробуем ПОЧИНИТЬ прогоном через music21
             # (repair: parse → strip → rewrite, см. analysis.repair) и проверяем
             # ещё раз — fallback, тяжёлый round-trip только когда без него никак.
@@ -309,25 +342,53 @@ class AudiverisService:
             except Exception:
                 logger.exception("music21 repair failed for %s", output_path)
 
-            if fixed_path is not None and midi_ok(fixed_path):
+            if fixed_path is not None and renders_ok(fixed_path):
                 result_path = fixed_path
                 fixed = True
             else:
-                detail = (
-                    "Не удалось получить валидный MusicXML: выход Audiveris не "
-                    "рендерится в MIDI через verovio даже после music21-фикса"
-                )
-                raise ProcessingError(detail, log_path=log_path)
+                # Последняя ступень перед провалом задачи: локализовать
+                # проблемное место бисекцией и выбросить его (см. analysis.salvage).
+                # Партитура без одного такта играбельна, а провал задачи — нет.
+                # Спасаем из выхода music21, если он получился: там XML уже
+                # нормализован, и резать его безопаснее.
+                from api.analysis import salvage
+
+                source = fixed_path if fixed_path is not None else output_path
+                rescued = None
+                try:
+                    rescued = salvage(source, renders_ok, out_dir=output_path.parent)
+                except Exception:
+                    logger.exception("salvage failed for %s", source)
+
+                if rescued is None:
+                    detail = (
+                        "Не удалось получить валидный MusicXML: verovio не принимает "
+                        "выход движка ни после music21-фикса, ни после удаления "
+                        "проблемных тактов"
+                    )
+                    raise ProcessingError(detail, log_path=log_path)
+
+                result_path, report = rescued
+                fixed = True
+                dropped_measures = int(report["dropped_measures"])
 
         return FileResult(
             filename=result_path.name,
             url=self._build_media_url(result_path),
             log_url=self._build_media_url(log_path) if log_path else None,
             fixed=fixed,
+            dropped_measures=dropped_measures,
             bpm=bpm,
             analysis=analysis,
             texts=texts,
         )
+
+    @staticmethod
+    def _can_recognise(path: Path) -> bool:
+        """Возьмётся ли за файл хоть один движок цепочки (omr или homr)."""
+        return (
+            settings.omr_pipeline_enabled and omr_bridge.is_supported(path)
+        ) or (settings.homr_enabled and is_photo(path))
 
     def process_single(
         self,
@@ -338,30 +399,53 @@ class AudiverisService:
     ) -> FileResult:
         """Process a single input file and return a FileResult.
 
-        Любое одиночное ИЗОБРАЖЕНИЕ (JPEG/HEIC/PNG/WebP) распознаём через homr —
-        он устойчивее к перекосу/шуму/перспективе. Только PDF идёт стандартным
-        путём через Audiveris. Постобработка (analysis/bpm/texts + проверка
-        midi_ok) для обоих движков одна и та же.
+        Распознают два движка, оба на homr:
+          1) пайплайн `omr/` (см. api/omr_bridge.py) — он готовит страницу и
+             зовёт homr, а PDF растеризует постранично. Берёт и растр, и PDF;
+          2) homr напрямую на сырой файл — второй и последний шанс для растра,
+             если подготовка страницы сделала хуже. Включается и при
+             `omr_pipeline_enabled=false` (откат без выката кода), но PDF он не
+             читает, так что для PDF первый путь единственный.
+
+        Audiveris из цепочки выведен: не смог homr — значит не смог. Сам движок в
+        проекте остался и будет использован в другом месте (`_run_audiveris` и
+        компания), но ни один запрос на распознавание его больше не запускает —
+        раньше он стоял тут третьей попыткой и добирал темп отдельным прогоном.
+
+        Постобработка (analysis/bpm/texts + renders_ok + repair + salvage) для
+        обоих путей одна и та же.
         """
         try:
+            omr_failure: ProcessingError | None = None
+            if settings.omr_pipeline_enabled and omr_bridge.is_supported(input_path):
+                result, omr_failure = self._try_omr(input_path, output_dir)
+                if result is not None:
+                    return result
+
             if settings.homr_enabled and is_photo(input_path):
-                output_path, log_path = homr_service.run(input_path, output_dir)
-                result = self._build_success_result(output_path, log_path)
-                # homr слабо распознаёт темп: если BPM не нашёлся — добираем его
-                # через Audiveris (он надёжнее) и вписываем и в файл, и в API-поле.
-                if result.bpm is None and settings.audiveris_bpm_fallback:
-                    bpm = self._extract_bpm_via_audiveris(input_path, output_dir)
-                    if bpm is not None:
-                        from api.analysis import inject_bpm
+                try:
+                    output_path, log_path = homr_service.run(input_path, output_dir)
+                    return self._build_success_result(output_path, log_path)
+                except ProcessingError as exc:
+                    if omr_failure is None:
+                        raise
+                    # Не смогли оба. Наверх отдаём причину от omr: в ней отчёт
+                    # стадий и ссылка на лог, а «homr не смог распознать фото»
+                    # не говорит ни клиенту, ни нам ничего. Замерено на боевом
+                    # файле: omr писал «стан слишком крупный (186.5px)», а в
+                    # архив провалов уезжало пустое «движок не справился».
+                    logger.warning(
+                        "homr на сыром файле тоже не смог (%s) — отдаём причину omr",
+                        exc.message,
+                    )
+                    raise omr_failure from exc
 
-                        inject_bpm(output_path, bpm)  # в отдаваемый файл (best-effort)
-                        result.bpm = bpm              # в ответ API — в любом случае
-                return result
-
-            output_path, log_path, interline = self._run_audiveris(
-                input_path, output_dir, preset, enhance
+            if omr_failure is not None:
+                raise omr_failure
+            raise ProcessingError(
+                f"Файл {input_path.name} не берёт ни один движок: "
+                "omr выключен или не знает такой формат, а homr читает только растр"
             )
-            return self._build_success_result(output_path, log_path)
         except LowInterlineError as exc:
             return FileResult(
                 filename=input_path.name,
@@ -375,52 +459,49 @@ class AudiverisService:
                 log_url=self._build_media_url(exc.log_path) if exc.log_path else None,
             )
 
-    def _extract_bpm_via_audiveris(self, input_path: Path, output_dir: Path) -> int | None:
-        """Best-effort: достать BPM фото через Audiveris, когда homr темп не нашёл.
+    def _try_omr(
+        self, input_path: Path, output_dir: Path
+    ) -> tuple[FileResult | None, ProcessingError | None]:
+        """Пайплайн `omr/` для одного файла.
 
-        Гоняем Audiveris на ИСХОДНОМ снимке во временный подкаталог и читаем темп
-        из его MusicXML. Намеренно НЕ препроцессим (upscale размывает мелкие цифры
-        темпа и ломает их OCR — см. image_min_dimension в config). Любая ошибка
-        или таймаут → None: проба не должна валить уже успешную задачу.
+        Возвращает (результат, причина провала): ровно одно из двух не None.
+        Причину возвращаем, а не бросаем, потому что за omr может стоять вторая
+        попытка (homr на сыром файле) — но если её нет, именно эта причина уйдёт
+        клиенту и в архив провалов, поэтому она несёт свой лог.
         """
-        from api.analysis import collect_bpm
-
-        probe_dir = output_dir / ".bpm_probe"
         try:
-            shutil.rmtree(probe_dir, ignore_errors=True)
-            probe_dir.mkdir(parents=True, exist_ok=True)
+            output_path, log_path = omr_bridge.run(input_path, output_dir)
+            return self._build_success_result(output_path, log_path), None
+        except ProcessingError as exc:
+            logger.warning("omr не справился с %s: %s", input_path.name, exc.message)
+            log_path = self._set_aside_omr_artefacts(input_path, output_dir)
+            return None, ProcessingError(exc.message, log_path=log_path or exc.log_path)
+        except Exception as exc:
+            logger.exception("omr упал на %s", input_path.name)
+            log_path = self._set_aside_omr_artefacts(input_path, output_dir)
+            return None, ProcessingError(
+                f"Пайплайн omr упал на {input_path.name}: {type(exc).__name__}: {exc}",
+                log_path=log_path,
+            )
 
-            # Копируем вход, чтобы не трогать оригинал; WebP -> JPG (Audiveris его
-            # не читает). _preprocess_image сознательно не вызываем.
-            probe_input = probe_dir / input_path.name
-            shutil.copyfile(input_path, probe_input)
-            probe_input = self._convert_webp_to_jpg(probe_input)
+    @staticmethod
+    def _set_aside_omr_artefacts(input_path: Path, output_dir: Path) -> Path | None:
+        """Убрать недоделанный выход omr, сохранив лог. Возвращает путь лога.
 
-            cmd = [
-                settings.audiveris_cmd,
-                "-batch",
-                "-constant",
-                f"org.audiveris.omr.sheet.ScaleBuilder.minInterline={settings.min_interline}",
-                *self._NO_MOVEMENT_SPLIT,
-                "-transcribe",
-                "-export",
-                "-output", str(probe_dir),
-                str(probe_input),
-            ]
-            result = self._run_command(cmd, probe_dir, self._timeout_for_single())
-            if result.returncode != 0:
-                return None
-            candidates = self._find_outputs(probe_dir)
-            if not candidates:
-                return None
-            return collect_bpm(sorted(candidates)[0])
-        except ProcessingError:
-            return None  # таймаут Audiveris (_run_command)
-        except Exception:
-            logger.exception("audiveris bpm probe failed for %s", input_path)
-            return None
-        finally:
-            shutil.rmtree(probe_dir, ignore_errors=True)
+        Лог переименовываем из `*.log`: `_find_audiveris_log` берёт любой `*.log`
+        в каталоге по времени, и сейчас, когда Audiveris из цепочки выведен, это
+        не мешает — но помешает, когда его подключат в другом месте.
+        """
+        stem = input_path.stem
+        log_path = output_dir / f"{stem}.omr.log"
+        kept: Path | None = None
+        if log_path.exists():
+            kept = output_dir / f"{stem}.omr.txt"
+            log_path.replace(kept)
+        for leftover in (f"{stem}.musicxml", f"{stem}.clean.png"):
+            (output_dir / leftover).unlink(missing_ok=True)
+        shutil.rmtree(output_dir / f"{stem}.pages", ignore_errors=True)
+        return kept
 
     def process_playlist(
         self,
@@ -431,35 +512,24 @@ class AudiverisService:
     ) -> FileResult:
         """Process multiple files as a playlist (one song across pages).
 
-        Если все входы — ФОТО и включён homr: каждое фото распознаём homr'ом
-        отдельно (он устойчивее к перекосу/шуму/перспективе), затем склеиваем
-        постранично через relieur (см. _run_homr_playlist). Иначе (PDF в
-        плейлисте или homr выключен) — прежний путь через Audiveris compound book.
-        Постобработка (analysis/bpm/texts + midi_ok + repair) для обоих одна.
+        Каждый вход распознаётся отдельно и постранично склеивается через relieur
+        (см. _run_homr_playlist). PDF в плейлисте больше не переключает задачу на
+        Audiveris compound book: пайплайн `omr/` растеризует его сам, страница за
+        страницей, и склейка не знает, откуда взялась страница.
+
+        Постобработка (analysis/bpm/texts + renders_ok + repair + salvage) та же,
+        что и в single.
         """
         try:
-            if (
-                settings.homr_enabled
-                and input_paths
-                and all(is_photo(p) for p in input_paths)
-            ):
+            if input_paths and all(self._can_recognise(p) for p in input_paths):
                 output_path, log_path = self._run_homr_playlist(input_paths, output_dir)
-                result = self._build_success_result(output_path, log_path)
-                # homr слабо распознаёт темп — добираем его Audiveris'ом по первой
-                # странице (как в single) и вписываем и в файл, и в ответ API.
-                if result.bpm is None and settings.audiveris_bpm_fallback:
-                    bpm = self._extract_bpm_via_audiveris(input_paths[0], output_dir)
-                    if bpm is not None:
-                        from api.analysis import inject_bpm
+                return self._build_success_result(output_path, log_path)
 
-                        inject_bpm(output_path, bpm)
-                        result.bpm = bpm
-                return result
-
-            output_path, log_path, interline = self._run_audiveris_playlist(
-                input_paths, output_dir, preset, enhance
+            unknown = [p.name for p in input_paths if not self._can_recognise(p)]
+            raise ProcessingError(
+                "В плейлисте есть файлы, которые не берёт ни один движок: "
+                + (", ".join(unknown) or "плейлист пуст")
             )
-            return self._build_success_result(output_path, log_path)
         except LowInterlineError as exc:
             return FileResult(
                 filename="playlist",
@@ -478,8 +548,9 @@ class AudiverisService:
     ) -> tuple[Path, Path | None]:
         """Распознать каждое фото плейлиста через homr и склеить в одну партитуру.
 
-        Каждое фото → homr → .mxl (тот же путь, что и single), в свой подкаталог
-        .page{i} ради раздельных логов и чтобы .mxl не перетирали друг друга.
+        Каждое фото → omr → .musicxml (тот же путь, что и single), в свой
+        подкаталог .page{i} ради раздельных логов и чтобы выходы не перетирали
+        друг друга.
         Затем relieur.merge_musicxml дописывает такты каждой следующей страницы в
         хвост соответствующей партии первой, сквозным образом перенумеровывает
         такты и снимает повторную декларацию key/clef/divisions на стыке страниц.
@@ -496,7 +567,26 @@ class AudiverisService:
         page_mxls: list[Path] = []
         last_log: Path | None = None
         for i, input_path in enumerate(input_paths):
-            mxl_path, log_path = homr_service.run(input_path, output_dir / f".page{i}")
+            # Тот же путь, что и в single: подготовка страницы пакетом omr, затем
+            # движок. Снимок разворота при этом сам разложится на две страницы и
+            # склеится внутри omr — relieur получит один файл на входной снимок,
+            # как и раньше.
+            page_dir = output_dir / f".page{i}"
+            mxl_path = log_path = None
+            if settings.omr_pipeline_enabled and omr_bridge.is_supported(input_path):
+                try:
+                    mxl_path, log_path = omr_bridge.run(input_path, page_dir)
+                except Exception:
+                    # Одна страница не должна ронять плейлист из-за нового пути:
+                    # отдаём её прежнему (homr на сырой снимок), как в single.
+                    logger.exception(
+                        "omr не справился со страницей %s — пробуем прежний путь",
+                        input_path.name,
+                    )
+                    self._set_aside_omr_artefacts(input_path, page_dir)
+                    mxl_path = None
+            if mxl_path is None:
+                mxl_path, log_path = homr_service.run(input_path, page_dir)
             page_mxls.append(mxl_path)
             last_log = log_path
 
@@ -522,6 +612,14 @@ class AudiverisService:
     _NO_MOVEMENT_SPLIT = [
         "-constant", "org.audiveris.omr.sheet.ProcessingSwitches.indentations=false",
     ]
+
+    # ------------------------------------------------------------------------
+    # Audiveris. Из цепочки распознавания выведен (2026-09-09): темп теперь
+    # читается из OCR, который homr и так делает, а третьей попыткой Audiveris
+    # стоял дорого и редко помогал. Код НЕ удалён намеренно — движок останется в
+    # проекте под другую задачу. Всё, что ниже, сейчас не вызывается ни одним
+    # запросом на распознавание; `preset` и `enhance` в API живут только здесь.
+    # ------------------------------------------------------------------------
 
     def _run_audiveris(
             self, input_path: Path, output_dir: Path, preset: str = "default",

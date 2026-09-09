@@ -63,6 +63,8 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 RUN homr --init
 
 COPY api /srv/api
+# Пакет подготовки страниц; api/omr_bridge.py зовёт его.
+COPY omr /srv/omr
 
 EXPOSE 8000
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]

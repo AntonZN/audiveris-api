@@ -147,6 +147,7 @@ class Worker:
                 enhance=bool(enhance),
                 input_paths=input_paths,
                 error=errors,
+                output_dir=output_dir,
             )
 
         shutil.rmtree(input_dir, ignore_errors=True)
@@ -156,6 +157,7 @@ class Worker:
         input_dir = Path(task.get("input_dir", ""))
         input_files = task.get("input_files", [])
         input_paths = [input_dir / fname for fname in input_files]
+        output_dir = task.get("output_dir")
         record_failure(
             task_id=task.get("id") or task.get("task_id"),
             kind="playlist" if task.get("playlist") else "single",
@@ -163,6 +165,7 @@ class Worker:
             enhance=bool(task.get("enhance")),
             input_paths=input_paths,
             error=error,
+            output_dir=Path(output_dir) if output_dir else None,
         )
 
 

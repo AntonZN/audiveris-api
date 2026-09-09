@@ -14,6 +14,13 @@ verovio==6.2.1
 # Фото-OMR для single-задач (JPEG/HEIC). Лёгкая ONNX-сборка homr (без torch);
 # тянет onnxruntime, rapidocr-onnxruntime, musicxml. Требует Python 3.10–3.12.
 homr==0.6.2
+# HEIC/HEIF с iPhone: Pillow сам их не открывает (features.check('heif') == False),
+# без этого пакета снимок с телефона не читается ни новым путём, ни старым.
+pillow-heif==0.21.0
+# Растеризация PDF для пакета omr/ (PDF идёт постранично, а не книгой целиком).
+# Именно pypdfium2: разрешительная лицензия и самодостаточные wheel'ы, в отличие
+# от pdf2image он не требует poppler в образе.
+pypdfium2==4.30.0
 sqlalchemy==2.0.36
 alembic==1.14.0
 psycopg2-binary==2.9.10

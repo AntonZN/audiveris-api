@@ -160,8 +160,8 @@ def _build_task(
 )
 async def create_single_task(
     file: UploadFile = File(..., description="Файл изображения (PNG, JPG, WebP) или PDF (до 5 страниц)"),
-    preset: Preset = Form(Preset.default, description="Пресет обработки"),
-    enhance: bool = Form(False, description="Агрессивная обработка фото/скриншотов (автокроп + апскейл + адаптивная бинаризация) для распознавания мелких/низкокачественных нот"),
+    preset: Preset = Form(Preset.default, description="Пресет обработки. Сейчас на распознавание не влияет: параметр настраивает Audiveris, а распознаёт homr. Принимается для совместимости"),
+    enhance: bool = Form(False, description="Агрессивная обработка фото/скриншотов. Сейчас на распознавание не влияет: подготовку страницы делает пайплайн omr, и делает её всегда. Принимается для совместимости"),
 ) -> TaskCreateResponse:
     """Создать задачу OMR для одного файла."""
     task_id = uuid.uuid4().hex
@@ -246,8 +246,8 @@ async def create_single_task(
 )
 async def create_batch_task(
     files: list[UploadFile] = File(..., description="Файлы изображений (PNG, JPG)"),
-    preset: Preset = Form(Preset.default, description="Пресет обработки"),
-    enhance: bool = Form(False, description="Агрессивная обработка фото/скриншотов (автокроп + апскейл + адаптивная бинаризация) для распознавания мелких/низкокачественных нот"),
+    preset: Preset = Form(Preset.default, description="Пресет обработки. Сейчас на распознавание не влияет: параметр настраивает Audiveris, а распознаёт homr. Принимается для совместимости"),
+    enhance: bool = Form(False, description="Агрессивная обработка фото/скриншотов. Сейчас на распознавание не влияет: подготовку страницы делает пайплайн omr, и делает её всегда. Принимается для совместимости"),
 ) -> TaskCreateResponse:
     """Создать задачу OMR для нескольких файлов (плейлист)."""
     if not files:
@@ -280,18 +280,19 @@ async def create_batch_task(
 @router.post(
     "/validate",
     response_model=ValidateResponse,
-    summary="Проверить MusicXML (сборка в MIDI через verovio)",
+    summary="Проверить MusicXML (примет ли его verovio, как в приложении)",
     description="""
-Проверяет, собирается ли загруженный MusicXML (.musicxml/.xml/.mxl) в MIDI через verovio.
-Это синхронная проверка «ок / не ок» — Audiveris иногда отдаёт MusicXML, на котором
-verovio падает при сборке MIDI.
+Проверяет, примет ли загруженный MusicXML (.musicxml/.xml/.mxl) тот же verovio, что стоит
+в мобильном приложении: файл загружается, собирается в MIDI и верстается первая страница —
+ровно те вызовы, что делает клиент. Синхронная проверка «ок / не ок»: движки OMR иногда
+отдают MusicXML, на котором verovio падает (вплоть до сегфолта).
 
 ## Поведение
 
 Всегда `200`. `valid` — был ли валиден ИСХОДНЫЙ файл; `fixed` — починили ли мы его;
 `url` — ссылка на рабочий файл (исходный или починенный).
 
-| `fix` | Исходный собирается | Не собирается |
+| `fix` | verovio принимает исходный | Не принимает |
 |-------|---------------------|---------------|
 | `false` | `{valid: true, fixed: false, url: null}` | `{valid: false, fixed: false, url: null}` |
 | `true`  | `{valid: true, fixed: false, url}` | чиним через music21 и пробуем снова: если ок — `{valid: false, fixed: true, url}`, иначе `{valid: false, fixed: false, url: null}` |
@@ -302,11 +303,11 @@ verovio падает при сборке MIDI.
 )
 def validate_musicxml(
     file: UploadFile = File(..., description="Файл MusicXML (.musicxml, .xml или .mxl)"),
-    fix: bool = Form(False, description="Чинить файл через music21, если verovio не собирает MIDI"),
+    fix: bool = Form(False, description="Чинить файл через music21, если verovio его не принимает"),
 ) -> ValidateResponse:
-    """Проверить (и опционально починить) MusicXML по сборке в MIDI через verovio."""
+    """Проверить (и опционально починить) MusicXML по тому, принимает ли его verovio."""
     from api.analysis import repair
-    from api.verovio_check import midi_ok
+    from api.verovio_check import renders_ok
 
     work_id = uuid.uuid4().hex
     work_dir = Path(settings.output_dir) / f"{VALIDATE_DIR_PREFIX}{work_id}"
@@ -317,8 +318,8 @@ def validate_musicxml(
     with input_path.open("wb") as handle:
         shutil.copyfileobj(file.file, handle)
 
-    # Исходный файл уже собирается?
-    if midi_ok(input_path):
+    # Исходный файл уже принимается verovio?
+    if renders_ok(input_path):
         if not fix:
             shutil.rmtree(work_dir, ignore_errors=True)
             return ValidateResponse(valid=True)
@@ -334,7 +335,7 @@ def validate_musicxml(
     # fix=true: чиним и пробуем снова. valid отражает исходный файл (он был
     # невалиден), fixed=true — что мы его починили и отдаём рабочую версию.
     fixed_path = repair(input_path, work_dir)
-    if fixed_path is not None and midi_ok(fixed_path):
+    if fixed_path is not None and renders_ok(fixed_path):
         input_path.unlink(missing_ok=True)
         return ValidateResponse(
             valid=False, fixed=True, url=audiveris_service._build_media_url(fixed_path)

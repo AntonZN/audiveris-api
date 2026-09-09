@@ -12,6 +12,7 @@ from pathlib import Path
 
 from api.config import settings
 from api.db import SessionLocal
+from api.failure_reasons import classify
 from api.failures_models import FailedFile
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,59 @@ def _unique_dest(dest: Path) -> Path:
         i += 1
 
 
+# Логи мелкие (отчёт стадий, stdout движка), но у Audiveris бывают гигантскими,
+# а класть в архив мегабайты бессмысленно: причина всегда в первых строках.
+_LOG_SUFFIXES = (".omr.txt", ".omr.log", ".engine.log", ".log")
+_MAX_LOG_BYTES = 2 * 1024 * 1024
+_MAX_LOGS_PER_TASK = 20
+
+
+def _archive_logs(output_dir: Path | None, dest_dir: Path) -> list[Path]:
+    """Скопировать логи обработки в архив. Возвращает копии в порядке полезности.
+
+    Порядок задан `_LOG_SUFFIXES`: сначала отчёт стадий пайплайна (в нём видно,
+    что случилось с геометрией и сколько станов нашлось), потом вывод движка.
+    Имя копии — путь относительно output_dir через «_», иначе одноимённые логи
+    страниц PDF затрут друг друга.
+    """
+    if not output_dir or not output_dir.exists():
+        return []
+    found: list[Path] = []
+    for suffix in _LOG_SUFFIXES:
+        for path in sorted(output_dir.rglob(f"*{suffix}")):
+            if path.is_file() and path not in found:
+                found.append(path)
+
+    copies: list[Path] = []
+    logs_dir = dest_dir / "logs"
+    for path in found[:_MAX_LOGS_PER_TASK]:
+        try:
+            if path.stat().st_size > _MAX_LOG_BYTES:
+                continue
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            flat = "_".join(path.relative_to(output_dir).parts)
+            dest = _unique_dest(logs_dir / flat)
+            shutil.copyfile(path, dest)
+            copies.append(dest)
+        except Exception:
+            logger.exception("failed to archive log %s", path)
+    return copies
+
+
+def _log_for(filename: str, logs: list[Path]) -> str | None:
+    """Лог, относящийся именно к этому входному файлу.
+
+    Логи названы по имени входа (`page.omr.txt`, `page.p02.engine.log`), поэтому
+    ищем по основе имени. Не нашли — берём первый: для одиночной задачи он и есть
+    нужный, а для плейлиста лучше показать хоть какой-то, чем ничего.
+    """
+    stem = Path(filename).stem
+    for log in logs:
+        if log.name.startswith(stem):
+            return str(log)
+    return str(logs[0]) if logs else None
+
+
 def record_failure(
     *,
     task_id: str | None,
@@ -39,8 +93,13 @@ def record_failure(
     enhance: bool,
     input_paths: list[Path],
     error: str | None,
+    output_dir: Path | None = None,
 ) -> None:
-    """Сохранить копии входных файлов проваленной задачи и завести строки в БД.
+    """Сохранить входные файлы и логи проваленной задачи, завести строки в БД.
+
+    Логи копируем из `output_dir`, потому что там они живут до первой уборки по
+    TTL — а разбирают провал обычно позже. Без них в архиве остаётся файл и одна
+    строка ошибки: видно ЧТО не получилось, но не видно ПОЧЕМУ.
 
     Ошибки архивации/БД глушим — аудит провалов не должен ломать сам OMR.
     Вызывать ДО удаления временного input_dir.
@@ -50,6 +109,11 @@ def record_failure(
         dest_dir.mkdir(parents=True, exist_ok=True)
 
         error_text = (error or "")[: settings.max_error_len] or None
+        # Причину считаем ОДИН раз при записи, а не при каждом показе: она нужна
+        # для группировки в SQL, а классификатор со временем меняется — пусть в
+        # строке останется то, как мы поняли ошибку тогда.
+        reason = classify(error)
+        logs = _archive_logs(output_dir, dest_dir)
 
         db = SessionLocal()
         try:
@@ -72,6 +136,8 @@ def record_failure(
                         filename=src.name,
                         stored_path=stored_path,
                         error=error_text,
+                        reason=reason,
+                        log_path=_log_for(src.name, logs),
                     )
                 )
             db.commit()

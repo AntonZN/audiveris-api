@@ -35,6 +35,15 @@ class FailedFile(Base):
     stored_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # Текст ошибки обработки (усечён до max_error_len при записи).
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Скопированный лог обработки этого файла (тоже внутри failures_dir). Без
+    # него в архиве лежит файл и одна строка ошибки — по ним видно ЧТО, но не
+    # видно ПОЧЕМУ: отчёт стадий и вывод движка остаются только во временном
+    # output_dir, который вычищается по TTL.
+    log_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Причина провала — сведённый к словарю текст ошибки (api/failure_reasons.py).
+    # Нужна, чтобы провалы можно было СЧИТАТЬ: по тексту это невозможно, он у
+    # каждого файла свой. Индекс — потому что по ней группируют и фильтруют.
+    reason: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
     # Флаг для ручного аудита: админ отмечает разобранные случаи.
     reviewed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 

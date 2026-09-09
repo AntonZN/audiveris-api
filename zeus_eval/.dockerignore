@@ -1,0 +1,5 @@
+# В образ едут только пакеты omr/ и zeus_eval/ — всё остальное лишнее.
+*
+!omr
+!zeus_eval
+zeus_eval/out

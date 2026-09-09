@@ -30,6 +30,9 @@ services:
       - "8000"
     volumes:
       - ./api:/srv/api
+      # omr монтируем рядом с api: иначе пакет живёт только внутри образа, и
+      # `git pull` + restart подсунет новый api/omr_bridge.py к старому omr.
+      - ./omr:/srv/omr
       - ./scripts:/srv/scripts
       - storage:/storage
     environment:

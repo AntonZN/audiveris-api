@@ -82,16 +82,17 @@ class FileResult(ApiModel):
     url: str | None = Field(default=None, description="Ссылка для скачивания")
     error: str | None = Field(default=None, description="Сообщение об ошибке")
     log_url: str | None = Field(default=None, description="Ссылка на лог Audiveris")
-    fixed: bool = Field(default=False, description="Был ли файл прогнан через music21 round-trip (true только если выход Audiveris не собирался в MIDI и его пришлось чинить)")
+    fixed: bool = Field(default=False, description="Файл пришлось чинить: verovio не принял выход движка, и мы прогнали его через music21 round-trip и/или выбросили проблемные такты")
+    dropped_measures: int = Field(default=0, description="Сколько тактов выброшено, чтобы verovio принял файл. 0 — партитура полная; >0 — НЕПОЛНАЯ, в ней не хватает такого числа тактов")
     bpm: int | None = Field(default=None, description="Темп начала песни (целое число BPM). None — Audiveris BPM не нашёл.")
     analysis: ScoreAnalysis | None = Field(default=None, description="Метаданные партитуры от music21 (тональность, размеры, список темпов, инструменты…)")
     texts: ScoreTexts | None = Field(default=None, description="Распознанные тексты, собранные ДО стрипа из XML. Мобила сама показывает их над плеером.")
 
 
 class ValidateResponse(ApiModel):
-    """Результат проверки «собирается ли MusicXML в MIDI через verovio»."""
+    """Результат проверки «примет ли MusicXML verovio из мобильного приложения»."""
 
-    valid: bool = Field(description="Собрался ли файл в MIDI (после фикса, если был)")
+    valid: bool = Field(description="Принял ли verovio файл: загрузка + MIDI + вёрстка (после фикса, если был)")
     fixed: bool = Field(default=False, description="Был ли файл починен music21 (только при fix=true)")
     url: str | None = Field(default=None, description="Ссылка на рабочий файл (только при fix=true)")
 

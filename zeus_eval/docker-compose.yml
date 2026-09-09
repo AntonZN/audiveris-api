@@ -1,0 +1,17 @@
+# Прогон Zeus по тестовым каталогам.
+#
+#   docker compose -f zeus_eval/docker-compose.yml build
+#   docker compose -f zeus_eval/docker-compose.yml run --rm zeus /data/fail/phone-01-angled-sheet.png -o /out
+#
+# Каталоги с картинками монтируются только на чтение: контейнер их не меняет,
+# всё, что он создаёт, уходит в /out.
+services:
+  zeus:
+    build:
+      context: ..
+      dockerfile: zeus_eval/Dockerfile
+    volumes:
+      - ../fail_prod_files:/data/fail:ro
+      - ../success_prod_files:/data/success:ro
+      - ./out:/out
+    working_dir: /srv

@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     image_contrast_factor: float = 1.2  # Contrast enhancement
     image_sharpness_factor: float = 1.5  # Sharpness enhancement
 
+    # --- Пайплайн подготовки omr/ ---
+    # Перед движком снимок проходит omr/: ориентация (скан боком), разрез
+    # разворота книги, рамка страницы и гомография, dewarp, свет и масштаб;
+    # PDF растеризуется постранично, страницы без нот пропускаются.
+    # Выключение возвращает прежнее поведение: homr напрямую на файл,
+    # PDF через Audiveris. Замеры — в omr/README.md и api/omr_bridge.py.
+    omr_pipeline_enabled: bool = True
+
     # --- homr (фото-OMR) ---
     # Для single-задач любое одиночное ИЗОБРАЖЕНИЕ (JPEG/HEIC/PNG/WebP) идёт не
     # через Audiveris, а через трансформерный homr — он устойчивее к перекосу,
@@ -63,10 +71,6 @@ class Settings(BaseSettings):
     # (failed_files), а не отдаётся клиенту как completed с пустым .mxl. 0 отключает
     # проверку.
     min_recognized_notes: int = 3
-    # homr слабо распознаёт темп. Если на фото BPM не нашёлся, дополнительно
-    # прогоняем снимок через Audiveris (он надёжнее достаёт темп) и вписываем
-    # найденное значение в результат — и в отдаваемый файл, и в API-поле bpm.
-    audiveris_bpm_fallback: bool = True
 
     # --- Каталог нот / админка ---
     # Postgres. Внутри docker-compose host = "postgres".

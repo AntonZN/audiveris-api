@@ -1,10 +1,13 @@
 """Пост-обработка MusicXML-выхода Audiveris.
 
-Политика: **фиксим всегда**. Audiveris регулярно отдаёт невалидный MusicXML
-(<beam> на ноте-члене аккорда, несбалансированные <slur>), на котором verovio
-в мобильных сборках падает при renderToMIDI. Прогон через music21 пересобирает
-модель и выкидывает дефекты; флаг отключения не предусмотрен — все случаи,
-которые мы пробовали детектить статически, не покрывали реальные падения.
+Политика: **фиксим по факту провала**. Движки OMR регулярно отдают невалидный
+MusicXML (<beam> на ноте-члене аккорда, несбалансированные <slur>), на котором
+verovio падает — вплоть до сегфолта. Но большинство файлов здоровы, а
+music21-round-trip не бесплатен, поэтому порядок такой: сначала спрашиваем
+verovio (`verovio_check.renders_ok`), и только если он файл не принял — зовём
+`repair`. Замер на реальных провалах прода: 15 из 17 файлов проходят сразу,
+2 требуют `repair`, и он чинит оба. Флага «не чинить» нет: все случаи, которые
+мы пробовали детектить статически, не покрывали реальные падения.
 
 Параллельно вычищаем **текстовый шум и утечки путей сервера** (слова, слоги,
 аккордовые символы, титулы, рехерсал-метки, <identification> с <source>/
@@ -24,8 +27,10 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import xml.etree.ElementTree as ET
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -295,6 +300,44 @@ def _add_tempo_to_root(root, bpm: int) -> bool:
     return True
 
 
+# Метрономная отметка в распознанном тексте. Число берём ТОЛЬКО когда оно
+# привязано к «=» или к слову BPM: иначе в темп превратится номер страницы, год
+# в копирайте или «Op. 27». Две-три цифры — по той же причине (1995 не темп).
+# `(?<!\d)`/`(?!\d)` обязательны: без них «♩=1200» дало бы темп 120.
+_TEMPO_PATTERNS = (
+    re.compile(r"=\s*(\d{2,3})(?!\d)"),                          # ♩=95, J = 95, M.M.=88
+    re.compile(r"(?<!\d)(\d{2,3})\s*(?:bpm|уд/мин)", re.I),       # 95 BPM
+    re.compile(r"bpm\s*[:=]?\s*(\d{2,3})(?!\d)", re.I),          # BPM: 95
+)
+# Метроном Мельцеля — 40..208; берём с запасом, но так, чтобы отсечь ерунду.
+_BPM_MIN, _BPM_MAX = 20, 400
+
+
+def bpm_from_texts(texts: Iterable[str]) -> int | None:
+    """Вытащить BPM из распознанного текста («♩ = 95», «95 BPM»).
+
+    Зачем: homr темп в MusicXML не пишет НИКОГДА — из картинки он его не читает
+    вообще, а `<sound tempo>` умеет только подставить из аргумента командной
+    строки. Раньше ради одного числа на каждый файл дополнительно запускался
+    Audiveris (JVM + полная транскрипция). Текст же у нас есть даром: заголовок
+    приходит с выхода движка, а метрономную строку homr прочитал OCR-ом над
+    верхним станом и выбросил — мы её перехватываем (см. `_install_tempo_capture`
+    в omr/engines/_homr_runner.py).
+
+    Строки просматриваются по порядку: первое правдоподобное число и берём.
+    Диапазон «100-120» даёт 100 — нижняя граница безопаснее для плеера.
+    """
+    for text in texts:
+        if not text:
+            continue
+        for pattern in _TEMPO_PATTERNS:
+            for match in pattern.finditer(text):
+                value = int(match.group(1))
+                if _BPM_MIN <= value <= _BPM_MAX:
+                    return value
+    return None
+
+
 def inject_bpm(path: Path, bpm: int) -> bool:
     """Вписать темп в MusicXML: `<metronome>` + `<sound tempo="N"/>` в первый такт.
 
@@ -459,30 +502,72 @@ def collect_texts(path: Path) -> dict:
     return out
 
 
-def _sanitize_divisions(root) -> None:
-    """Заменить <divisions>0</divisions> (или пустое/нечисловое) на 480.
+_DEFAULT_DIVISIONS = 480
 
-    Audiveris изредка выплёвывает <divisions>0</divisions>, на котором music21
-    при парсинге валится с `ZeroDivisionError` внутри `xmlToDuration`
-    (`noteDivisions / divisions`) — без шанса перехватить выше уровня одной
-    конкретной ноты. По смыслу MusicXML 0 не имеет интерпретации (количество
-    делений четверти не может быть нулём), поэтому замена на 480 (один из
-    стандартных значений) безопасна: длительности нот в этой партии будут
-    выражены в той же шкале относительно друг друга.
+
+def _valid_divisions(elements) -> list[int]:
+    """Все осмысленные значения <divisions> внутри переданных элементов."""
+    values: list[int] = []
+    for element in elements:
+        for div in element.iter("divisions"):
+            try:
+                value = int((div.text or "").strip())
+            except ValueError:
+                continue
+            if value > 0:
+                values.append(value)
+    return values
+
+
+def _sanitize_divisions(root) -> None:
+    """Починить <divisions>, которые Audiveris изредка отдаёт нулевыми/мусорными.
+
+    По смыслу MusicXML 0 не имеет интерпретации (делений четверти не может быть
+    ноль), а music21 на нём валится с `ZeroDivisionError` внутри `xmlToDuration`
+    — без шанса перехватить выше уровня одной ноты.
+
+    Подставлять КОНСТАНТУ нельзя. <divisions> задаётся на партию, и если у
+    соседней партии 4, а сломанной мы пропишем 480, длительности разъедутся в
+    120 раз: партия станет валидной и при этом неиграбельной. Поэтому берём
+    значение оттуда, где оно заведомо осмысленно, по убыванию близости:
+
+      1. самое частое <divisions> в ТОЙ ЖЕ партии (партия может законно менять
+         его между тактами — берём преобладающее);
+      2. самое частое по всему документу;
+      3. только если во всём файле нет ни одного валидного — константа 480.
     """
-    DEFAULT = 480
-    for div in root.iter("divisions"):
-        text = (div.text or "").strip()
-        try:
-            val = int(text)
-        except ValueError:
-            val = 0
-        if val <= 0:
-            logger.warning(
-                "MusicXML <divisions>=%r — replacing with %d for music21 safety",
-                text, DEFAULT,
-            )
-            div.text = str(DEFAULT)
+    from collections import Counter, defaultdict
+
+    def most_common(values: list[int]) -> int | None:
+        return Counter(values).most_common(1)[0][0] if values else None
+
+    document = most_common(_valid_divisions([root]))
+
+    # Группируем по id партии: в score-partwise это один <part> на партию, в
+    # score-timewise — по одному <part> в каждом <measure>. Группировка по id
+    # верна для обоих вариантов.
+    scopes: dict[str | None, list] = defaultdict(list)
+    for part in root.iter("part"):
+        scopes[part.get("id")].append(part)
+    if not scopes:
+        scopes[None] = [root]
+
+    for elements in scopes.values():
+        local = most_common(_valid_divisions(elements)) or document or _DEFAULT_DIVISIONS
+        for element in elements:
+            for div in element.iter("divisions"):
+                text = (div.text or "").strip()
+                try:
+                    value = int(text)
+                except ValueError:
+                    value = 0
+                if value <= 0:
+                    logger.warning(
+                        "MusicXML <divisions>=%r — replacing with %d "
+                        "(taken from the same part/document, not a constant)",
+                        text, local,
+                    )
+                    div.text = str(local)
 
 
 def _sanitize_clefs(root) -> None:
@@ -692,6 +777,228 @@ def repair(path: Path, out_dir: Path | None = None) -> Path | None:
         return None
     _strip_text_xml(fixed_path)
     return fixed_path
+
+
+# ----------------------------------------------------------------------------------
+# Спасение частично битого файла
+# ----------------------------------------------------------------------------------
+
+# Порядок элементов внутри <attributes> задан схемой MusicXML; при переносе
+# атрибутов в следующий такт его надо соблюсти, иначе получится невалидный XML.
+_ATTRIBUTE_ORDER = (
+    "divisions", "key", "time", "staves", "part-symbol", "instruments",
+    "clef", "staff-details", "transpose", "directive", "measure-style",
+)
+
+
+def _reduced_copy(root, drop_parts: set[int], drop_measures: set[int],
+                  carry_attributes: bool = True):
+    """Копия партитуры без указанных партий и тактов.
+
+    Такты выбрасываются по ИНДЕКСУ и сразу из всех партий — иначе партии
+    разъедутся по времени и файл станет хуже, чем был.
+
+    `carry_attributes` — переносить ли <attributes> выброшенного такта вперёд.
+    По умолчанию да: иначе вместе с первым тактом уходят divisions/ключ, и
+    остаток играется не в том темпе. Но у verovio бывают файлы, которые
+    рендерятся только БЕЗ такого переноса (воспроизведено на реальном выходе);
+    объяснить это изнутри его C++ не получилось, поэтому `salvage` просто
+    пробует оба варианта и оставляет тот, что движок принял.
+    """
+    import copy
+
+    reduced = copy.deepcopy(root)
+    parts = reduced.findall("part")
+
+    # Партию убираем вместе с её объявлением в <part-list>: болтающийся
+    # <score-part> без <part> — это уже невалидный MusicXML.
+    part_list = reduced.find("part-list")
+    for index in sorted(drop_parts, reverse=True):
+        if index >= len(parts):
+            continue
+        victim = parts[index]
+        if part_list is not None:
+            for declaration in part_list.findall("score-part"):
+                if declaration.get("id") == victim.get("id"):
+                    part_list.remove(declaration)
+        reduced.remove(victim)
+
+    for part in reduced.findall("part"):
+        measures = part.findall("measure")
+        if carry_attributes:
+            for index in sorted(drop_measures):
+                if index < len(measures):
+                    _carry_attributes_forward(measures, index, drop_measures)
+        for index in sorted(drop_measures, reverse=True):
+            if index < len(measures):
+                part.remove(measures[index])
+    return reduced
+
+
+def _carry_attributes_forward(measures, index: int, drop_measures: set[int]) -> None:
+    """Перенести <attributes> выбрасываемого такта в первый выживший следующий.
+
+    Без этого выбрасывание ПЕРВОГО такта уносит с собой divisions, ключ и
+    тональность — остаток формально отрендерится, но длительности будут
+    считаться от чужого divisions, то есть партия поедет по темпу. Переносим
+    только те элементы, которых в такте-приёмнике ещё нет: его собственные
+    значения новее и главнее.
+    """
+    # Блоков <attributes> в одном такте может быть НЕСКОЛЬКО (Audiveris и homr
+    # регулярно пишут divisions отдельно от key/clef). Берём все: если унести
+    # только первый, у остатка партитуры пропадёт ключ, и движок откажется её
+    # рисовать — ровно на этом спасение phone-06 и ломалось.
+    sources = measures[index].findall("attributes")
+    if not sources:
+        return
+    heir = next(
+        (m for i, m in enumerate(measures) if i > index and i not in drop_measures), None
+    )
+    if heir is None:
+        return
+    target = heir.find("attributes")
+    if target is None:
+        target = ET.Element("attributes")
+        heir.insert(0, target)
+    existing = {child.tag for child in target}
+    for source in sources:
+        for child in source:
+            if child.tag not in existing:
+                target.append(child)
+                existing.add(child.tag)
+    # Восстанавливаем порядок, требуемый схемой.
+    ordered = sorted(list(target), key=lambda el: (
+        _ATTRIBUTE_ORDER.index(el.tag) if el.tag in _ATTRIBUTE_ORDER else len(_ATTRIBUTE_ORDER)
+    ))
+    for child in list(target):
+        target.remove(child)
+    for child in ordered:
+        target.append(child)
+
+
+def _locate_bad_measures(renders, drop_parts: set[int], dropped: set[int], total: int) -> set[int]:
+    """Найти бисекцией такт(ы), из-за которых файл не принимается.
+
+    Инвариант поиска: если выбрасывание половины кандидатов помогло, виновник в
+    этой половине — сужаемся в неё. Если не помогла ни одна половина, виновник
+    не один; тогда возвращаем весь оставшийся кусок целиком, а решать, не
+    слишком ли он велик, будет вызывающий по своему бюджету.
+
+    Стоимость — около 2·log2(N) проверок: для 60 тактов это ~12 запусков verovio,
+    порядка четырёх секунд. Против нынешнего «задача провалена» — дёшево.
+    """
+    candidates = [i for i in range(total) if i not in dropped]
+    while len(candidates) > 1:
+        middle = len(candidates) // 2
+        left, right = candidates[:middle], candidates[middle:]
+        if renders(drop_parts, dropped | set(left)):
+            candidates = left
+        elif renders(drop_parts, dropped | set(right)):
+            candidates = right
+        else:
+            break
+    return set(candidates)
+
+
+def salvage(
+    path: Path,
+    accepts,
+    *,
+    out_dir: Path | None = None,
+    max_rounds: int = 3,
+    max_dropped_ratio: float = 0.34,
+) -> "tuple[Path, dict] | None":
+    """Выбросить проблемный кусок партитуры, чтобы уцелело остальное.
+
+    Последняя ступень после `repair`: если verovio не принимает файл даже после
+    music21-round-trip, вместо провала всей задачи пробуем локализовать
+    проблемное место и убрать его. Половина партитуры лучше, чем ничего.
+
+    Работает на голом XML, БЕЗ music21 — именно потому, что сюда попадают файлы,
+    которые music21 разобрать не смог (иначе их починил бы `repair`).
+
+    Порядок: сначала пробуем выбросить целую партию (самый крупный кусок, и на
+    многопартитурных выходах Audiveris обычно виновата одна), затем такты
+    бисекцией. `accepts` — проверка «принимает ли движок» (в проде
+    `verovio_check.renders_ok`), вынесена параметром, чтобы алгоритм можно было
+    тестировать без verovio.
+
+    Возвращает (путь, отчёт) или None, если спасти не удалось или пришлось бы
+    выбросить больше `max_dropped_ratio` тактов — обрубок в треть партитуры
+    отдавать клиенту хуже, чем честно провалить задачу.
+    """
+    root = _read_musicxml_root(path)
+    if root is None:
+        logger.warning("salvage: не смог прочитать %s", path)
+        return None
+
+    parts = root.findall("part")
+    if not parts:
+        return None
+    total = max(len(part.findall("measure")) for part in parts)
+    if total < 2:
+        return None
+
+    target_dir = out_dir if out_dir is not None else path.parent
+    probe = target_dir / f"{path.stem}_salvage_probe.musicxml"
+    budget = max(1, int(total * max_dropped_ratio))
+
+    def search(carry: bool) -> "tuple[set[int], set[int]] | None":
+        def renders(drop_parts: set[int], drop_measures: set[int]) -> bool:
+            ET.ElementTree(
+                _reduced_copy(root, drop_parts, drop_measures, carry)
+            ).write(probe, encoding="utf-8", xml_declaration=True)
+            return bool(accepts(probe))
+
+        dropped_parts: set[int] = set()
+        dropped_measures: set[int] = set()
+
+        # Целая партия — самый крупный кусок и самая дешёвая проверка.
+        for index in range(len(parts)):
+            if len(parts) < 2:
+                break
+            if renders({index}, dropped_measures):
+                return {index}, set()
+
+        for _ in range(max_rounds):
+            if renders(dropped_parts, dropped_measures):
+                break
+            found = _locate_bad_measures(renders, dropped_parts, dropped_measures, total)
+            if not found or len(dropped_measures | found) > budget:
+                return None
+            dropped_measures |= found
+
+        if not renders(dropped_parts, dropped_measures):
+            return None
+        if not dropped_parts and not dropped_measures:
+            return None
+        return dropped_parts, dropped_measures
+
+    outcome = None
+    carried = True
+    for carry in (True, False):
+        outcome = search(carry)
+        if outcome is not None:
+            carried = carry
+            break
+
+    probe.unlink(missing_ok=True)
+    if outcome is None:
+        return None
+    dropped_parts, dropped_measures = outcome
+
+    result = target_dir / f"{path.stem}_salvaged.musicxml"
+    ET.ElementTree(
+        _reduced_copy(root, dropped_parts, dropped_measures, carried)
+    ).write(result, encoding="utf-8", xml_declaration=True)
+    report = {
+        "dropped_parts": len(dropped_parts),
+        "dropped_measures": len(dropped_measures),
+        "total_measures": total,
+        "attributes_carried": carried,
+    }
+    logger.warning("salvage: %s спасён ценой %s", path.name, report)
+    return result, report
 
 
 def analyze_only(path: Path) -> dict | None:

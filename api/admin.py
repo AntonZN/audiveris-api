@@ -6,6 +6,7 @@ name/title (исключён из форм), поэтому в админке е
 """
 
 from datetime import datetime, timedelta, timezone
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,8 @@ from wtforms import widgets as wtforms_widgets
 from api.db import SessionLocal
 
 # Кастомные шаблоны форм (переинициализация select2 с minimumInputLength=0).
+logger = logging.getLogger(__name__)
+
 ADMIN_TEMPLATES_DIR = str(Path(__file__).parent / "admin_templates")
 
 
@@ -68,6 +71,9 @@ from api.catalog_models import (
 from api.catalog_enums import Difficulty
 from api.config import settings
 from api.stats_models import ProcessingEvent
+from api import failure_stats
+from api.failure_reasons import hint as reason_hint
+from api.failure_reasons import label as reason_label
 from api.failures_models import FailedFile
 from api.db import engine
 
@@ -200,6 +206,46 @@ def _failure_file_formatter(model, attribute):
     return Markup(
         f'<a href="{src}" target="_blank" rel="noopener" '
         f'title="Скачать {name}">{thumb}</a>'
+    )
+
+
+_REASON_COLORS = {
+    "engine_failed": "#d63939",      # это к нам
+    "invalid_musicxml": "#d63939",
+    "merge_failed": "#d63939",
+    "internal_error": "#d63939",
+    "timeout": "#f76707",            # это к ресурсам
+    "no_music": "#6c757d",           # это к входным данным
+    "unreadable_input": "#6c757d",
+    "unsupported_format": "#6c757d",
+}
+
+
+def _reason_formatter(model, attribute):
+    """Причина провала: человеческая подпись, код — в подсказке.
+
+    Цвет отделяет «это к нам» (движок, склейка, невалидный MusicXML) от «это к
+    входным данным»: в списке из сотни строк это единственный способ увидеть
+    картину, не читая каждую ошибку.
+    """
+    code = getattr(model, "reason", None)
+    text = reason_label(code)
+    color = _REASON_COLORS.get(code or "", "#9ca3af")
+    tooltip = escape(f"{code or 'unknown'} — {reason_hint(code)}")
+    return Markup(
+        f'<span title="{tooltip}" style="color:{color};white-space:nowrap;">{escape(text)}</span>'
+    )
+
+
+def _failure_log_formatter(model, attribute):
+    """Ссылка на лог обработки. Он и объясняет, ПОЧЕМУ файл не взяли."""
+    stored = getattr(model, "log_path", None)
+    src = _failure_src(stored)
+    if not src:
+        return Markup('<span style="color:#9ca3af;">нет лога</span>')
+    return Markup(
+        f'<a href="{escape(src)}" target="_blank" rel="noopener">'
+        f'{escape(Path(stored).name)}</a>'
     )
 
 
@@ -665,16 +711,18 @@ class FailedFileAdmin(ModelView, model=FailedFile):
         FailedFile.stored_path,
         FailedFile.id,
         FailedFile.created_at,
+        FailedFile.reason,
         FailedFile.kind,
         FailedFile.filename,
-        FailedFile.preset,
-        FailedFile.enhance,
         FailedFile.reviewed,
         FailedFile.error,
+        FailedFile.log_path,
         FailedFile.task_id,
     ]
     column_labels = {
         FailedFile.stored_path: "Файл",
+        FailedFile.reason: "Причина",
+        FailedFile.log_path: "Лог",
         FailedFile.created_at: "Когда",
         FailedFile.kind: "Тип",
         FailedFile.filename: "Имя файла",
@@ -684,11 +732,14 @@ class FailedFileAdmin(ModelView, model=FailedFile):
         FailedFile.task_id: "Задача",
         FailedFile.error: "Ошибка",
     }
-    column_searchable_list = [FailedFile.task_id, FailedFile.filename]
+    # Причина ищется наравне с именем: ссылки со сводки на дашборде ведут сюда
+    # поиском по коду причины (?search=engine_failed).
+    column_searchable_list = [FailedFile.task_id, FailedFile.filename, FailedFile.reason]
     column_sortable_list = [
         FailedFile.id,
         FailedFile.created_at,
         FailedFile.kind,
+        FailedFile.reason,
         FailedFile.reviewed,
     ]
     column_default_sort = ("created_at", True)
@@ -696,14 +747,24 @@ class FailedFileAdmin(ModelView, model=FailedFile):
     form_columns = [FailedFile.reviewed]
     column_formatters = {
         FailedFile.stored_path: _failure_file_formatter,
+        FailedFile.reason: _reason_formatter,
         FailedFile.error: _error_short_formatter,
+        FailedFile.log_path: _failure_log_formatter,
     }
     column_formatters_detail = {
         FailedFile.stored_path: _failure_file_formatter,
+        FailedFile.reason: _reason_formatter,
+        FailedFile.log_path: _failure_log_formatter,
     }
 
     async def on_model_delete(self, model, request: Request) -> None:
-        """Удаляя строку, убираем и сохранённую копию файла с диска."""
+        """Удаляя строку, убираем и сохранённые копии файла и лога с диска."""
+        log_path = getattr(model, "log_path", None)
+        if log_path:
+            try:
+                Path(log_path).unlink(missing_ok=True)
+            except Exception:
+                logger.exception("не смог удалить лог провала %s", log_path)
         stored_path = getattr(model, "stored_path", None)
         if stored_path:
             try:
@@ -767,8 +828,37 @@ class OmrDashboardView(BaseView):
             "max_tasks": max_tasks,
             "totals": totals,
             "days": days,
+            **self._failure_reasons(cutoff),
         }
         return await self.templates.TemplateResponse(request, "omr_dashboard.html", context)
+
+    @staticmethod
+    def _failure_reasons(cutoff: datetime) -> dict:
+        """Блок «почему проваливались» для шаблона.
+
+        Считает `api.failure_stats.by_reason`, здесь только раскраска и ссылки:
+        строка ведёт в архив проблемных файлов, отфильтрованный по этой причине —
+        метрика без возможности посмотреть сами файлы бесполезна.
+        """
+        try:
+            reasons, total = failure_stats.by_reason(cutoff)
+        except Exception:
+            # Колонки может не быть, если миграцию ещё не накатили: дашборд
+            # важнее свежей метрики, показываем его без этого блока.
+            logger.exception("не смог посчитать причины провалов")
+            return {"reasons": [], "reasons_total": 0, "failures_url": None}
+
+        for reason in reasons:
+            reason["color"] = _REASON_COLORS.get(reason["code"], "#9ca3af")
+
+        # Идентификатор вьюхи вычисляет sqladmin — берём готовый, а не угадываем
+        # правило именования. Не нашли — обойдёмся без ссылок.
+        identity = getattr(FailedFileAdmin, "identity", None)
+        return {
+            "reasons": reasons,
+            "reasons_total": total,
+            "failures_url": f"/admin/{identity}/list" if identity else None,
+        }
 
 
 def init_admin(app: FastAPI) -> Admin:
