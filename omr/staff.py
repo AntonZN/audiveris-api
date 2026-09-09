@@ -446,24 +446,50 @@ def reference_x(lines: list[StaffLine]) -> float:
     return float(np.median([(line.x0 + line.x1) / 2 for line in lines]))
 
 
-def estimate_interline(lines: list[StaffLine]) -> float | None:
-    """Межлинейное расстояние, px — мода гистограммы зазоров между соседями по Y.
+def interline_candidates(lines: list[StaffLine], limit: int = 3) -> list[float]:
+    """Кандидаты на межлинейное расстояние, от самого населённого пика к менее.
 
-    Внутристановых зазоров всегда вчетверо больше, чем межстановых, поэтому мода
-    надёжнее медианы: она не сдвигается, даже если станов на странице мало.
+    Основа — гистограмма зазоров между соседями по Y: внутристановых зазоров
+    вчетверо больше, чем межстановых, поэтому мода надёжнее медианы. Но мода
+    ошибается: на снимке, где линейки местами разорваны, самым населённым
+    оказывается пик ПОЛОВИННОГО зазора, и тогда `find_staves` со своим окном
+    [0.65×, 1.45×] не собирает ни одного стана — при том, что линеек найдено
+    шесть десятков.
+
+    Так и вышло на боевом файле: 3.5 px вместо 6.9, ноль станов вместо шести, и
+    хватало разницы в ОДИН пиксель по высоте уменьшенной копии, чтобы результат
+    перевернулся. Поэтому кандидатов несколько, а выбор между ними делает тот,
+    кто умеет их проверить, — сборка станов (см. `analyse`).
     """
     if len(lines) < 2:
-        return None
+        return []
     x = reference_x(lines)
     ys = np.sort([line.y_at(x) for line in lines])
     gaps = np.diff(ys)
     gaps = gaps[(gaps > 1.5) & (gaps < 200)]
     if gaps.size == 0:
-        return None
+        return []
     histogram, edges = np.histogram(gaps, bins=40)
-    peak = int(np.argmax(histogram))
-    inside = gaps[(gaps >= edges[peak]) & (gaps <= edges[peak + 1])]
-    return float(np.median(inside)) if inside.size else float(np.median(gaps))
+    candidates: list[float] = []
+    for peak in np.argsort(histogram)[::-1]:
+        if histogram[peak] == 0:
+            break
+        inside = gaps[(gaps >= edges[peak]) & (gaps <= edges[peak + 1])]
+        if inside.size:
+            candidates.append(float(np.median(inside)))
+        if len(candidates) >= limit:
+            break
+    return candidates or [float(np.median(gaps))]
+
+
+def estimate_interline(lines: list[StaffLine]) -> float | None:
+    """Самый населённый зазор между соседними линейками, px.
+
+    Грубая оценка «на один взгляд». Там, где от неё зависит результат, берут
+    `interline_candidates` и проверяют их сборкой станов.
+    """
+    candidates = interline_candidates(lines, limit=1)
+    return candidates[0] if candidates else None
 
 
 def find_staves(lines: list[StaffLine], interline: float) -> list[Staff]:
@@ -565,9 +591,18 @@ def analyse(
     # дотягивание хвостов и окончательная оценка.
     rough = estimate_interline(lines) or 10.0
     lines = extend_lines(lines, mask, max_drift=1.5 * rough)
-    interline = estimate_interline(lines)
+    # Оценку интервала не берём на веру: пробуем несколько кандидатов и оставляем
+    # тот, на котором станы вообще собираются. Проверка дешёвая — `find_staves`
+    # работает по списку линеек, без обращения к картинке.
+    staves: list[Staff] = []
+    interline: float | None = None
+    for candidate in interline_candidates(lines):
+        grouped = find_staves(lines, candidate)
+        if len(grouped) > len(staves):
+            staves, interline = grouped, candidate
+    if interline is None:
+        interline = estimate_interline(lines)
 
-    staves = find_staves(lines, interline or 0.0)
     if staves:
         interline = float(np.median([s.interline for s in staves]))
     return lines, staves, interline

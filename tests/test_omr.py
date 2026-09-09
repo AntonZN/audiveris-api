@@ -196,6 +196,43 @@ class OmrPipelineTest(unittest.TestCase):
         self.assertAlmostEqual(staff.estimate_interline(lines), 12.0, delta=0.5)
 
 
+    def test_interline_is_chosen_by_whether_staves_assemble(self) -> None:
+        """Мода гистограммы зазоров бывает не тем пиком: если линейки местами
+        разорваны, самым населённым оказывается ПОЛОВИННЫЙ зазор, окно сборки
+        [0.65x, 1.45x] промахивается мимо настоящего — и станов ноль при шести
+        десятках найденных линеек.
+
+        Боевой случай (phone-07): 3.5px вместо 6.9, ноль станов вместо шести, и
+        хватало разницы в один пиксель по высоте уменьшенной копии, чтобы
+        результат перевернулся между машинами. Поэтому кандидат выбирается по
+        тому, собираются ли на нём станы.
+        """
+        def wide(y: float) -> staff.StaffLine:
+            xs = np.linspace(0, 400, 20)
+            return staff.StaffLine(xs, np.full_like(xs, float(y)), thickness=1.0)
+
+        def short(y: float, x0: float) -> staff.StaffLine:
+            xs = np.linspace(x0, x0 + 10, 5)
+            return staff.StaffLine(xs, np.full_like(xs, float(y)), thickness=1.0)
+
+        lines = []
+        for top in (0, 100, 200):                       # три стана с интервалом 12
+            lines += [wide(top + i * 12) for i in range(5)]
+        # Шум: тридцать коротких обрывков с зазором 5. Таких зазоров больше, чем
+        # настоящих по 12, поэтому гистограмма показывает именно на них. В стан
+        # они не собираются — по горизонтали не перекрываются.
+        lines += [short(400 + i * 5, i * 13) for i in range(30)]
+
+        candidates = staff.interline_candidates(lines)
+        best = max(candidates, key=lambda value: len(staff.find_staves(lines, value)))
+
+        self.assertGreater(len(candidates), 1, "одного кандидата мало, чтобы ошибиться")
+        self.assertAlmostEqual(best, 12.0, delta=1.0)
+        self.assertEqual(len(staff.find_staves(lines, best)), 3)
+        # Самый населённый зазор здесь именно шумовой — на нём не собирается ничего.
+        self.assertAlmostEqual(candidates[0], 5.0, delta=1.0)
+        self.assertEqual(staff.find_staves(lines, candidates[0]), [])
+
     def test_line_y_at_interpolates_along_the_curve(self) -> None:
         line = staff.StaffLine(np.array([0.0, 10.0, 20.0]), np.array([0.0, 5.0, 0.0]), 2.0)
         self.assertAlmostEqual(line.y_at(5.0), 2.5, places=5)
