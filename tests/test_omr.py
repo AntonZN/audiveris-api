@@ -249,6 +249,23 @@ class OmrPipelineTest(unittest.TestCase):
             self.assertTrue(mask[:, :half].sum() > mask[:, half:].sum())
 
 
+    def test_orientation_says_why_it_left_the_page_alone(self) -> None:
+        """Две причины не поворачивать — «станов и так хватает» и «у повёрнутой
+        не лучше» — должны различаться в логе. На проде они выглядели одинаково
+        («портретная»), и разобрать по логу расхождение с локальным прогоном было
+        нечем."""
+        from omr.stages.orient import OrientationInfo
+
+        skipped = OrientationInfo(False, 9, 0, tested=False).reason
+        checked = OrientationInfo(False, 0, 2).reason
+        turned = OrientationInfo(True, 0, 6, clockwise=False, clef_score=-0.01).reason
+
+        self.assertIn("поворот не проверяли", skipped)
+        self.assertIn("станов 9", skipped)
+        self.assertIn("у повёрнутой 2", checked)
+        self.assertIn("против часовой", turned)
+        self.assertNotEqual(skipped, checked)
+
     def test_orientation_leaves_an_upright_page_alone(self) -> None:
         page = make_page(staves=6)
         gray = load.to_gray(page)

@@ -42,6 +42,10 @@ class OrientationInfo:
     staves_rotated: int
     clockwise: bool = True
     clef_score: float = 0.0
+    # Гоняли ли детектор по повёрнутой копии. Без этого флага два совершенно
+    # разных решения — «станов и так много» и «повёрнутая не лучше» — выглядят
+    # в логе одинаково, и разобрать провал на проде нечем (напоролись 09.09).
+    tested: bool = True
 
     @property
     def reason(self) -> str:
@@ -50,7 +54,10 @@ class OrientationInfo:
             return (f"повёрнута на 90° {side} "
                     f"(станов {self.staves_rotated} против {self.staves_upright}, "
                     f"ключи {self.clef_score:+.2f})")
-        return "портретная"
+        if not self.tested:
+            return f"портретная (станов {self.staves_upright}, поворот не проверяли)"
+        return (f"портретная (станов {self.staves_upright}, "
+                f"у повёрнутой {self.staves_rotated} — не лучше)")
 
 
 def fix_orientation(
@@ -64,7 +71,7 @@ def fix_orientation(
     # Если станов и так набралось достаточно, страница точно не лежит на боку:
     # у повёрнутого листа их находится ноль. Экономим лишний разбор.
     if staves_found >= config.analysis_enough_staves:
-        return image, OrientationInfo(False, staves_found, 0)
+        return image, OrientationInfo(False, staves_found, 0, tested=False)
 
     rotated_gray = cv2.rotate(gray, cv2.ROTATE_90_CLOCKWISE)
     _, rotated_staves, _ = staff.analyse(
