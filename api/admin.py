@@ -237,6 +237,26 @@ def _reason_formatter(model, attribute):
     )
 
 
+def _prepared_formatter(model, attribute):
+    """Кадр, ушедший в движок: превью рядом с исходником.
+
+    Смысл колонки — сравнение. Слева то, что снял пользователь, справа то, что
+    после наших поворотов и распрямлений увидел движок; расхождение между ними и
+    объясняет большинство провалов.
+    """
+    stored = getattr(model, "prepared_path", None)
+    src = _failure_src(stored)
+    if not src:
+        return Markup('<span style="color:#9ca3af;">нет кадра</span>')
+    safe = escape(src)
+    return Markup(
+        f'<a href="{safe}" target="_blank" rel="noopener" title="Кадр, который ушёл в движок">'
+        f'<img src="{safe}" alt="" loading="lazy" '
+        'style="height:60px;width:auto;max-width:120px;object-fit:contain;'
+        'border-radius:4px;background:#f3f4f6;"></a>'
+    )
+
+
 def _failure_log_formatter(model, attribute):
     """Ссылка на лог обработки. Он и объясняет, ПОЧЕМУ файл не взяли."""
     stored = getattr(model, "log_path", None)
@@ -709,6 +729,7 @@ class FailedFileAdmin(ModelView, model=FailedFile):
     # текстом; реальные колонки, чтобы SQLAdmin корректно их разрешал.
     column_list = [
         FailedFile.stored_path,
+        FailedFile.prepared_path,
         FailedFile.id,
         FailedFile.created_at,
         FailedFile.reason,
@@ -720,7 +741,8 @@ class FailedFileAdmin(ModelView, model=FailedFile):
         FailedFile.task_id,
     ]
     column_labels = {
-        FailedFile.stored_path: "Файл",
+        FailedFile.stored_path: "Как снято",
+        FailedFile.prepared_path: "Что увидел движок",
         FailedFile.reason: "Причина",
         FailedFile.log_path: "Лог",
         FailedFile.created_at: "Когда",
@@ -747,24 +769,28 @@ class FailedFileAdmin(ModelView, model=FailedFile):
     form_columns = [FailedFile.reviewed]
     column_formatters = {
         FailedFile.stored_path: _failure_file_formatter,
+        FailedFile.prepared_path: _prepared_formatter,
         FailedFile.reason: _reason_formatter,
         FailedFile.error: _error_short_formatter,
         FailedFile.log_path: _failure_log_formatter,
     }
     column_formatters_detail = {
         FailedFile.stored_path: _failure_file_formatter,
+        FailedFile.prepared_path: _prepared_formatter,
         FailedFile.reason: _reason_formatter,
         FailedFile.log_path: _failure_log_formatter,
     }
 
     async def on_model_delete(self, model, request: Request) -> None:
-        """Удаляя строку, убираем и сохранённые копии файла и лога с диска."""
-        log_path = getattr(model, "log_path", None)
-        if log_path:
+        """Удаляя строку, убираем и все сохранённые копии с диска."""
+        for attribute_name in ("log_path", "prepared_path"):
+            stored = getattr(model, attribute_name, None)
+            if not stored:
+                continue
             try:
-                Path(log_path).unlink(missing_ok=True)
+                Path(stored).unlink(missing_ok=True)
             except Exception:
-                logger.exception("не смог удалить лог провала %s", log_path)
+                logger.exception("не смог удалить %s провала: %s", attribute_name, stored)
         stored_path = getattr(model, "stored_path", None)
         if stored_path:
             try:

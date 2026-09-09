@@ -251,15 +251,18 @@ def _recognize_page(
     debug = DebugWriter(debug_dir / f"p{number:02d}" if debug_dir and indexed else debug_dir)
     page.prepare = prepare(image_path, config, debug)
 
+    # Кадр, каким его увидит движок, сохраняем ДО решения о пропуске: именно на
+    # пропущенных страницах и хочется потом посмотреть, что подготовка сделала с
+    # геометрией — в архиве провалов это главный экспонат.
+    clean = output_dir / f"{stem}.clean.png"
+    cv2.imwrite(str(clean), page.prepare.image)
+    page.clean_image = clean
+
     # Страница без единого стана — обложка, колофон, оборот. Гнать её через
     # движок незачем: он на ней либо упадёт, либо выдаст пустышку.
     if page.prepare.staves_after == 0 and page.prepare.staves_as_shot == 0:
         page.skipped = "нотных станов не найдено"
         return page
-
-    clean = output_dir / f"{stem}.clean.png"
-    cv2.imwrite(str(clean), page.prepare.image)
-    page.clean_image = clean
 
     try:
         outcome = homr_engine.run(

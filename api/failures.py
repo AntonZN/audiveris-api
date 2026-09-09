@@ -36,53 +36,65 @@ def _unique_dest(dest: Path) -> Path:
 # а класть в архив мегабайты бессмысленно: причина всегда в первых строках.
 _LOG_SUFFIXES = (".omr.txt", ".omr.log", ".engine.log", ".log")
 _MAX_LOG_BYTES = 2 * 1024 * 1024
-_MAX_LOGS_PER_TASK = 20
+
+# Кадр, который ушёл в движок: `<имя>.clean.png` рядом с выходом. Полутоновый
+# PNG шириной 1920 — это сотни килобайт, но битый вход бывает и тяжелее.
+_PREPARED_SUFFIXES = (".clean.png",)
+_MAX_PREPARED_BYTES = 8 * 1024 * 1024
+
+_MAX_FILES_PER_TASK = 20
 
 
-def _archive_logs(output_dir: Path | None, dest_dir: Path) -> list[Path]:
-    """Скопировать логи обработки в архив. Возвращает копии в порядке полезности.
+def _archive_artefacts(
+    output_dir: Path | None,
+    dest_dir: Path,
+    suffixes: tuple[str, ...],
+    subdir: str,
+    max_bytes: int,
+) -> list[Path]:
+    """Скопировать артефакты обработки в архив. Возвращает копии по полезности.
 
-    Порядок задан `_LOG_SUFFIXES`: сначала отчёт стадий пайплайна (в нём видно,
-    что случилось с геометрией и сколько станов нашлось), потом вывод движка.
-    Имя копии — путь относительно output_dir через «_», иначе одноимённые логи
-    страниц PDF затрут друг друга.
+    Порядок задан порядком `suffixes`: у логов первым идёт отчёт стадий (в нём
+    видно, что случилось с геометрией и сколько станов нашлось), потом вывод
+    движка. Имя копии — путь относительно output_dir через «_», иначе
+    одноимённые артефакты страниц PDF затирают друг друга.
     """
     if not output_dir or not output_dir.exists():
         return []
     found: list[Path] = []
-    for suffix in _LOG_SUFFIXES:
+    for suffix in suffixes:
         for path in sorted(output_dir.rglob(f"*{suffix}")):
             if path.is_file() and path not in found:
                 found.append(path)
 
     copies: list[Path] = []
-    logs_dir = dest_dir / "logs"
-    for path in found[:_MAX_LOGS_PER_TASK]:
+    target = dest_dir / subdir
+    for path in found[:_MAX_FILES_PER_TASK]:
         try:
-            if path.stat().st_size > _MAX_LOG_BYTES:
+            if path.stat().st_size > max_bytes:
                 continue
-            logs_dir.mkdir(parents=True, exist_ok=True)
+            target.mkdir(parents=True, exist_ok=True)
             flat = "_".join(path.relative_to(output_dir).parts)
-            dest = _unique_dest(logs_dir / flat)
+            dest = _unique_dest(target / flat)
             shutil.copyfile(path, dest)
             copies.append(dest)
         except Exception:
-            logger.exception("failed to archive log %s", path)
+            logger.exception("failed to archive artefact %s", path)
     return copies
 
 
-def _log_for(filename: str, logs: list[Path]) -> str | None:
-    """Лог, относящийся именно к этому входному файлу.
+def _artefact_for(filename: str, artefacts: list[Path]) -> str | None:
+    """Артефакт, относящийся именно к этому входному файлу.
 
-    Логи названы по имени входа (`page.omr.txt`, `page.p02.engine.log`), поэтому
-    ищем по основе имени. Не нашли — берём первый: для одиночной задачи он и есть
-    нужный, а для плейлиста лучше показать хоть какой-то, чем ничего.
+    Артефакты названы по имени входа (`page.omr.txt`, `page.p02.clean.png`),
+    поэтому ищем по основе имени. Не нашли — берём первый: для одиночной задачи
+    он и есть нужный, а для плейлиста лучше показать хоть какой-то, чем ничего.
     """
     stem = Path(filename).stem
-    for log in logs:
-        if log.name.startswith(stem):
-            return str(log)
-    return str(logs[0]) if logs else None
+    for artefact in artefacts:
+        if artefact.name.startswith(stem):
+            return str(artefact)
+    return str(artefacts[0]) if artefacts else None
 
 
 def record_failure(
@@ -97,9 +109,10 @@ def record_failure(
 ) -> None:
     """Сохранить входные файлы и логи проваленной задачи, завести строки в БД.
 
-    Логи копируем из `output_dir`, потому что там они живут до первой уборки по
-    TTL — а разбирают провал обычно позже. Без них в архиве остаётся файл и одна
-    строка ошибки: видно ЧТО не получилось, но не видно ПОЧЕМУ.
+    Логи и подготовленный кадр копируем из `output_dir`, потому что там они живут
+    до первой уборки по TTL — а разбирают провал обычно позже. Без них в архиве
+    остаётся файл и одна строка ошибки: видно ЧТО не получилось, но не видно
+    ПОЧЕМУ и что мы с картинкой успели сделать.
 
     Ошибки архивации/БД глушим — аудит провалов не должен ломать сам OMR.
     Вызывать ДО удаления временного input_dir.
@@ -113,7 +126,12 @@ def record_failure(
         # для группировки в SQL, а классификатор со временем меняется — пусть в
         # строке останется то, как мы поняли ошибку тогда.
         reason = classify(error)
-        logs = _archive_logs(output_dir, dest_dir)
+        logs = _archive_artefacts(
+            output_dir, dest_dir, _LOG_SUFFIXES, "logs", _MAX_LOG_BYTES)
+        # Кадр перед отправкой в движок: по нему видно, что подготовка сделала с
+        # геометрией. Без него по логу понятно «станов 0», но не понятно почему.
+        prepared = _archive_artefacts(
+            output_dir, dest_dir, _PREPARED_SUFFIXES, "prepared", _MAX_PREPARED_BYTES)
 
         db = SessionLocal()
         try:
@@ -137,7 +155,8 @@ def record_failure(
                         stored_path=stored_path,
                         error=error_text,
                         reason=reason,
-                        log_path=_log_for(src.name, logs),
+                        log_path=_artefact_for(src.name, logs),
+                        prepared_path=_artefact_for(src.name, prepared),
                     )
                 )
             db.commit()

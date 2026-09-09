@@ -498,8 +498,10 @@ class AudiverisService:
         if log_path.exists():
             kept = output_dir / f"{stem}.omr.txt"
             log_path.replace(kept)
-        for leftover in (f"{stem}.musicxml", f"{stem}.clean.png"):
-            (output_dir / leftover).unlink(missing_ok=True)
+        # `.clean.png` НЕ удаляем: это кадр, который ушёл в движок, и он уезжает
+        # в архив провалов как главный экспонат для разбора. Прежнему пути он не
+        # мешает — тот ищет свои выходы по расширению.
+        (output_dir / f"{stem}.musicxml").unlink(missing_ok=True)
         shutil.rmtree(output_dir / f"{stem}.pages", ignore_errors=True)
         return kept
 

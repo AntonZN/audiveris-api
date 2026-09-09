@@ -140,6 +140,38 @@ class RecordFailureTest(unittest.TestCase):
                 "имя копии должно нести путь: одноимённые логи страниц затрут друг друга",
             )
 
+    def test_archives_the_frame_that_went_into_the_engine(self) -> None:
+        """Кадр после подготовки — главный экспонат разбора: по логу видно
+        «станов 0», а по нему — что подготовка сделала с геометрией."""
+        session = FakeSession()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "in" / "page.png"
+            source.parent.mkdir()
+            source.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+            out = root / "out"
+            (out / "page.pages").mkdir(parents=True)
+            (out / "page.omr.txt").write_text("отчёт стадий")
+            (out / "page.clean.png").write_bytes(b"\x89PNG prepared frame")
+            (out / "page.pages" / "page.p02.clean.png").write_bytes(b"\x89PNG page two")
+
+            with mock.patch.object(failures, "SessionLocal", lambda: session), \
+                 mock.patch.object(failures.settings, "failures_dir", str(root / "arch")):
+                failures.record_failure(
+                    task_id="t4", kind="single", preset=None, enhance=False,
+                    input_paths=[source], error="нотных станов не найдено",
+                    output_dir=out,
+                )
+
+            row = session.added[0]
+            self.assertTrue(row.prepared_path.endswith("page.clean.png"), row.prepared_path)
+            self.assertTrue(Path(row.prepared_path).exists())
+            frames = sorted(p.name for p in (root / "arch" / "t4" / "prepared").iterdir())
+            self.assertEqual(frames, ["page.clean.png", "page.pages_page.p02.clean.png"])
+            # Логи и кадры лежат раздельно, иначе в архиве каша.
+            self.assertTrue((root / "arch" / "t4" / "logs" / "page.omr.txt").exists())
+
     def test_a_failure_without_logs_is_still_recorded(self) -> None:
         session = FakeSession()
         with tempfile.TemporaryDirectory() as tmp:
@@ -155,6 +187,7 @@ class RecordFailureTest(unittest.TestCase):
                 )
 
         self.assertIsNone(session.added[0].log_path)
+        self.assertIsNone(session.added[0].prepared_path)
 
     def test_missing_error_text_is_recorded_as_unknown(self) -> None:
         session = FakeSession()
