@@ -31,6 +31,10 @@
 * эталон бывает ФРАГМЕНТОМ страницы (у Шуберта — только №15 из трёх пьес на
   листе). Поэтому рядом со строгой метрикой считается `fragment`: лишняя музыка
   в начале и в конце выхода не штрафуется. Строгая остаётся — она ловит мусор.
+
+Ударные (`tests/images/drum`): ноты без высоты (`<unpitched>`). Если они есть в
+эталоне, все метрики считаются по ключу «место на стане + форма головки»
+(`_drum_key`), а отдельно — совпадение только по месту (`position_f1`).
 """
 
 from __future__ import annotations
@@ -58,10 +62,12 @@ REFERENCE_SUFFIXES = (".musicxml", ".xml", ".mxl")
 @dataclass
 class Note:
     onset: float     # номер такта + доля такта
-    midi: int
-    degree: int      # ступень: октава*7 + буква — для диагностики ключа
+    midi: int        # у ноты без высоты (ударные) -1
+    degree: int      # ступень: октава*7 + буква; у ударных — место на стане (display-step)
     part: int
     staff: int
+    head: str = ""   # форма головки: "" обычная, "x", "diamond"… — у ударных это инструмент
+    unpitched: bool = False
 
 
 @dataclass
@@ -194,15 +200,22 @@ def read(path: Path, unfold: bool = False) -> Score:
                     longest = max(longest, position)
                     staff = int((element.findtext("staff") or "1").strip() or 1)
                     staves.add(staff)
+                    head = _head(element.findtext("notehead"))
                     pitch = element.find("pitch")
-                    if pitch is None:
-                        continue
-                    step = pitch.findtext("step") or "C"
-                    octave = int(pitch.findtext("octave") or 4)
-                    alter = int(round(float(pitch.findtext("alter") or 0)))
-                    midi = 12 * (octave + 1) + _SEMITONE[step] + alter
-                    pending.append((onset, Note(0.0, midi, octave * 7 + _DEGREE[step],
-                                                part_index, staff)))
+                    unpitched = element.find("unpitched")
+                    if pitch is not None:
+                        step = pitch.findtext("step") or "C"
+                        octave = int(pitch.findtext("octave") or 4)
+                        alter = int(round(float(pitch.findtext("alter") or 0)))
+                        midi = 12 * (octave + 1) + _SEMITONE[step] + alter
+                        pending.append((onset, Note(0.0, midi, octave * 7 + _DEGREE[step],
+                                                    part_index, staff, head)))
+                    elif unpitched is not None:
+                        # Без display-step нота стоит на средней линии (B4 скрипичного).
+                        step = unpitched.findtext("display-step") or "B"
+                        octave = int(unpitched.findtext("display-octave") or 4)
+                        pending.append((onset, Note(0.0, -1, octave * 7 + _DEGREE[step],
+                                                    part_index, staff, head, True)))
             for onset, note in pending:
                 note.onset = measure_index + (onset / longest if longest > 0 else 0.0)
                 score.notes.append(note)
@@ -244,8 +257,37 @@ def accuracy(candidate, reference, free_ends: bool = False) -> float:
     return 1.0 - levenshtein(candidate, reference, free_ends) / len(reference)
 
 
-def _sequence(notes: list[Note]) -> list[int]:
-    return [n.midi for n in sorted(notes, key=lambda n: (round(n.onset, 4), n.midi))]
+def _head(text: str | None) -> str:
+    name = (text or "").strip().lower()
+    if name == "normal":
+        return ""
+    return "x" if name == "cross" else name
+
+
+# Коды головок для ключа ударных; незнакомая форма — последний код.
+_HEADS = ("", "x", "circle-x", "diamond", "triangle", "slash", "square", "circle-dot")
+
+
+def _pitch_key(note: Note) -> int:
+    return note.midi
+
+
+def _drum_key(note: Note) -> int:
+    """Ударный «звук»: место на стане плюс форма головки.
+
+    Ровно так Audiveris сам различает инструменты (drum-set.xml: pitch-position +
+    motif). Номера инструментов из MusicXML сравнивать нельзя: MuseScore пишет в
+    каждый файл всю установку, Audiveris называет их по-своему. Нота с высотой
+    идёт сюда же по своей ступени — так обычная партия рядом с ударными
+    (фортепиано в `metal-drum`) и выход homr, который ударных не знает и пишет
+    их нотами с высотой, сравнимы с эталоном.
+    """
+    code = _HEADS.index(note.head) if note.head in _HEADS else len(_HEADS)
+    return note.degree * 16 + code
+
+
+def _sequence(notes: list[Note], key=_pitch_key) -> list[int]:
+    return [key(n) for n in sorted(notes, key=lambda n: (round(n.onset, 4), key(n)))]
 
 
 def _bag_f1(a: Counter, b: Counter) -> float:
@@ -295,15 +337,24 @@ class Comparison:
     unfolded: bool
     staves_rows: list[StaffRow]
     unmatched: list[tuple[tuple[int, int], int]]
+    # Эталон с ударными: всё выше считается по ключу «место + головка», а здесь —
+    # только по месту на стане, без формы головки (None, если ударных нет).
+    position_f1: float | None = None
+    unpitched: tuple[int, int] = (0, 0)   # нот без высоты: выход / эталон
 
     def report(self) -> str:
+        drum = self.position_f1 is not None
         lines = [
             f"партий {self.parts[0]}/{self.parts[1]}  станов {self.staves[0]}/{self.staves[1]}  "
             f"тактов {self.measures[0]}/{self.measures[1]}  нот {self.notes[0]}/{self.notes[1]}"
             + ("  (повторы выхода развёрнуты)" if self.unfolded else ""),
-            f"высоты F1 {self.pitch_f1 * 100:5.1f}%  полнота {self.pitch_recall * 100:5.1f}%   "
+            f"{'место+головка' if drum else 'высоты'} F1 {self.pitch_f1 * 100:5.1f}%  "
+            f"полнота {self.pitch_recall * 100:5.1f}%   "
             f"global {self.strict * 100:6.1f}%  fragment {self.fragment * 100:6.1f}%",
         ]
+        if drum:
+            lines.append(f"ударные: без высоты {self.unpitched[0]}/{self.unpitched[1]}  "
+                         f"место (без головки) F1 {self.position_f1 * 100:5.1f}%")
         for row in self.staves_rows:
             where = "  -  " if row.candidate is None else f"P{row.candidate[0] + 1}s{row.candidate[1]}"
             shift = (f"  ключ? сдвиг {row.shift:+d} ступ. ({row.base_f1 * 100:.0f}%->"
@@ -330,9 +381,11 @@ def compare(candidate_path: Path, reference_path: Path) -> Comparison:
         return streams
 
     ours, theirs = by_staff(candidate), by_staff(reference)
+    drum = any(n.unpitched for n in reference.notes)
+    key = _drum_key if drum else _pitch_key
     # Стан эталона -> лучший стан выхода, жадно по точности, каждый не больше раза.
     pairs = sorted(
-        ((accuracy(_sequence(o), _sequence(r), True), rk, ok)
+        ((accuracy(_sequence(o, key), _sequence(r, key), True), rk, ok)
          for rk, r in theirs.items() for ok, o in ours.items()),
         key=lambda item: item[0], reverse=True,
     )
@@ -358,9 +411,13 @@ def compare(candidate_path: Path, reference_path: Path) -> Comparison:
             rows.append(StaffRow(rk, clef(reference, rk), len(theirs[rk]), None, "", 0,
                                  0.0, 0, 0.0, 0.0))
 
-    ours_bag = Counter(n.midi for n in candidate.notes)
-    theirs_bag = Counter(n.midi for n in reference.notes)
-    ours_seq, theirs_seq = _sequence(candidate.notes), _sequence(reference.notes)
+    ours_bag = Counter(key(n) for n in candidate.notes)
+    theirs_bag = Counter(key(n) for n in reference.notes)
+    ours_seq, theirs_seq = _sequence(candidate.notes, key), _sequence(reference.notes, key)
+    position_f1 = None
+    if drum:
+        position_f1 = _bag_f1(Counter(n.degree for n in candidate.notes),
+                              Counter(n.degree for n in reference.notes))
     return Comparison(
         parts=(candidate.parts, reference.parts),
         staves=(candidate.staves, reference.staves),
@@ -372,7 +429,10 @@ def compare(candidate_path: Path, reference_path: Path) -> Comparison:
         fragment=accuracy(ours_seq, theirs_seq, free_ends=True),
         unfolded=unfold,
         staves_rows=rows,
-        unmatched=[(key, len(notes)) for key, notes in ours.items() if key not in taken_candidate],
+        unmatched=[(k, len(notes)) for k, notes in ours.items() if k not in taken_candidate],
+        position_f1=position_f1,
+        unpitched=(sum(n.unpitched for n in candidate.notes),
+                   sum(n.unpitched for n in reference.notes)),
     )
 
 
