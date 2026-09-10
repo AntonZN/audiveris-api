@@ -33,13 +33,19 @@ PRESET_CONSTANTS: dict[Preset, list[str]] = {
     ],
 
     Preset.drums: [
-        f"{_FONT_PREFIX}.defaultMusicFamily=JazzPerc",
+        # Leland, не JazzPerc: с JazzPerc Audiveris не узнаёт ни одной крестовой
+        # головки (хай-хэт, тарелки) в нотах из MuseScore — F1 55-83% против 96-100%
+        # на tests/images/drum.
+        f"{_FONT_PREFIX}.defaultMusicFamily=Leland",
         f"{_PREFIX}.drumNotation=true",
         f"{_PREFIX}.crossHeads=true",
     ],
 
     Preset.drums_1line: [
-        f"{_FONT_PREFIX}.defaultMusicFamily=JazzPerc",
+        # Leland, не JazzPerc: с JazzPerc Audiveris не узнаёт ни одной крестовой
+        # головки (хай-хэт, тарелки) в нотах из MuseScore — F1 55-83% против 96-100%
+        # на tests/images/drum.
+        f"{_FONT_PREFIX}.defaultMusicFamily=Leland",
         f"{_PREFIX}.drumNotation=true",
         f"{_PREFIX}.oneLineStaves=true",
         f"{_PREFIX}.crossHeads=true",
@@ -95,8 +101,8 @@ def get_preset_description(preset: Preset) -> str:
     descriptions = {
         Preset.default: "Standard classical/sheet music (Bravura font)",
         Preset.jazz: "Jazz music with chord names (FinaleJazz font)",
-        Preset.drums: "Drum notation on 5-line staves (JazzPerc font)",
-        Preset.drums_1line: "Drum notation on 1-line staves (JazzPerc font)",
+        Preset.drums: "Drum notation on 5-line staves (Leland font)",
+        Preset.drums_1line: "Drum notation on 1-line staves (Leland font)",
         Preset.guitar: "Guitar with tablature, fingerings, frets, chord names",
         Preset.bass: "Bass guitar with 4-line tablature",
         Preset.vocal: "Vocal/choir with lyrics above and below staff",

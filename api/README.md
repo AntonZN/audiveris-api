@@ -188,9 +188,9 @@ curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:8000/tasks/abc123def
     },
     {
       "name": "drums",
-      "description": "Drum notation on 5-line staves (JazzPerc font)",
+      "description": "Drum notation on 5-line staves (Leland font)",
       "constants": [
-        "org.audiveris.omr.ui.symbol.MusicFont.defaultMusicFamily=JazzPerc",
+        "org.audiveris.omr.ui.symbol.MusicFont.defaultMusicFamily=Leland",
         "org.audiveris.omr.sheet.ProcessingSwitches.drumNotation=true",
         "org.audiveris.omr.sheet.ProcessingSwitches.crossHeads=true"
       ]
@@ -223,8 +223,8 @@ Health check (не требует авторизации).
 |--------|----------|-------|
 | `default` | Стандартные ноты (классика) | Bravura |
 | `jazz` | Джаз с названиями аккордов | FinaleJazz |
-| `drums` | Барабаны на 5-линейном стане | JazzPerc |
-| `drums_1line` | Барабаны на 1-линейном стане | JazzPerc |
+| `drums` | Барабаны на 5-линейном стане | Leland |
+| `drums_1line` | Барабаны на 1-линейном стане | Leland |
 | `guitar` | Гитара (табы, аппликатура, лады, аккорды) | Bravura |
 | `bass` | Бас-гитара (4-линейные табы) | Bravura |
 | `vocal` | Вокал/хор (текст сверху и снизу) | Bravura |
@@ -235,6 +235,17 @@ Health check (не требует авторизации).
 
 Пресет `drums` предназначен **только** для настоящей drum нотации с перкуссионным ключом.
 Не используйте его для обычных нот — получите ошибку.
+
+Шрифт — Leland, а не JazzPerc, который советует документация Audiveris: с JazzPerc
+Audiveris не узнаёт ни одной крестовой головки (хай-хэт, тарелки) в нотах из
+MuseScore. Замер на `tests/images/drum` (`omr/refcheck.py`): JazzPerc — F1 55-83%,
+Leland — 96-100%.
+
+`drums_1line`: если на листе ТОЛЬКО однолинейные станы, Audiveris не может измерить
+интервал и падает с «No regularly spaced lines found». Интервал надо задать руками:
+`-constant org.audiveris.omr.sheet.Scale.defaultInterlineSpecification=<px>` (порядка
+высоты нотной головки в пикселях). Пресет этого не делает — значение своё для каждого
+снимка.
 
 Где взять тестовые drum ноты:
 - [Redeye Percussion](https://www.redeyepercussion.com/) — рекомендовано Audiveris

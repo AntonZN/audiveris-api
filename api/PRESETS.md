@@ -96,6 +96,20 @@
 NullPointerException: Cannot load from int array because "pitches" is null
 ```
 
+### Шрифт: Leland, а не JazzPerc
+
+Документация Audiveris советует для ударных шрифт JazzPerc, но на нотах из
+MuseScore с ним Audiveris не узнаёт **ни одной** крестовой головки: хай-хэт и
+тарелки пропадают целиком. Замер 5.11 на `tests/images/drum` (F1 по месту на стане
+и форме головки, `omr/refcheck.py`):
+
+| файл | JazzPerc | Bravura | Leland |
+|------|----------|---------|--------|
+| drum-exercises (свёрстан Leland) | 55.7% | 96.6% | 100% |
+| drum-kit-patterns (MScore) | 57.1% | 100% | 100% |
+| metal-drum (MScore) | 83.3% | 96.2% | 95.7% |
+| rock-drum-fills (MScore) | 81.1% | 98.6% | 100% |
+
 ### Пример использования API
 
 ```bash
@@ -117,6 +131,20 @@ curl -X POST \
 - Простая перкуссия на одной линии
 - Партии отдельных инструментов (бонго, конга, тамбурин)
 - Ритмические паттерны без указания высоты
+
+### Интервал задаётся вручную
+
+Если на листе ТОЛЬКО однолинейные станы, Audiveris не из чего измерить интервал, и
+он падает с `No regularly spaced lines found`. Интервал передаётся константой:
+
+```
+-constant org.audiveris.omr.sheet.Scale.defaultInterlineSpecification=<px>
+```
+
+Значение — порядка высоты нотной головки в пикселях, у каждого снимка своё, поэтому
+пресет его не задаёт. На фото `fail_prod_files/perc-01-snare-1line.png` медиана
+высоты головки 18 px: с 18 Audiveris выдаёт 17 из 32 тактов, с 22 — хуже, без
+константы — ничего.
 
 ### Отличие от drums
 
@@ -302,8 +330,8 @@ Audiveris автоматически определяет 2-staff parts как �
 |--------|-------|---------------------|
 | default | Bravura | Классика, стандартные ноты |
 | jazz | FinaleJazz | Джаз, lead sheets, аккорды |
-| drums | JazzPerc | Барабаны (5 линий) |
-| drums_1line | JazzPerc | Барабаны (1 линия) |
+| drums | Leland | Барабаны (5 линий) |
+| drums_1line | Leland | Барабаны (1 линия) |
 | guitar | Bravura | Гитара с табами |
 | bass | Bravura | Бас-гитара |
 | vocal | Bravura | Вокал с текстом |
