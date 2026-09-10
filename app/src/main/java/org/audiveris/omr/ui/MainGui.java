@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -67,6 +67,8 @@ import java.awt.BorderLayout;
 import java.awt.Container;
 import java.awt.Dimension;
 import java.awt.GridLayout;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
 import java.util.ArrayList;
@@ -565,7 +567,7 @@ public class MainGui
     protected void startup ()
     {
         logger.debug("MainGui. 2/startup");
-        logger.info("{} version {}", WellKnowns.TOOL_NAME, WellKnowns.TOOL_REF);
+        logger.debug("{} version {}", WellKnowns.TOOL_NAME, WellKnowns.TOOL_REF);
         logger.info("\n{}", LogUtil.allInitialMessages());
 
         if (!OcrUtil.getOcr().isAvailable()) {
@@ -577,6 +579,9 @@ public class MainGui
 
         frame = getMainFrame();
         frame.setName("AudiverisMainFrame"); // For SAF life cycle
+
+        // Workaround for resizing issues in some tiling window managers (e.g. niri)
+        UIUtil.addResizeWorkaround(frame);
 
         stubsController = StubsController.getInstance();
         stubsController.subscribe(this);

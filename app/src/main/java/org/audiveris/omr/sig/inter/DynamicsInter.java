@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -27,6 +27,8 @@ import org.audiveris.omr.glyph.Glyph;
 import org.audiveris.omr.glyph.Shape;
 import org.audiveris.omr.math.GeoOrder;
 import org.audiveris.omr.math.GeoUtil;
+import org.audiveris.omr.sheet.ProcessingSwitch;
+import org.audiveris.omr.sheet.ProcessingSwitches;
 import org.audiveris.omr.sheet.Scale;
 import org.audiveris.omr.sheet.Staff;
 import org.audiveris.omr.sheet.SystemInfo;
@@ -252,6 +254,8 @@ public class DynamicsInter
     //------------//
     /**
      * Look up system for a potential link.
+     * <p>
+     * The strategy depends on book/sheet parameters 'dynamicsAboveStaff' and 'dynamicsBelowStaff'.
      *
      * @param system containing system
      * @return link or null
@@ -276,11 +280,23 @@ public class DynamicsInter
         final Rectangle widenedBounds = getBounds();
         widenedBounds.grow(maxXGap, 0);
 
+        // Book/sheet parameters
+        final ProcessingSwitches switches = system.getSheet().getStub().getProcessingSwitches();
+        final boolean aboveStaff = switches.getValue(ProcessingSwitch.dynamicsAboveStaff);
+        final boolean belowStaff = switches.getValue(ProcessingSwitch.dynamicsBelowStaff);
+
         for (VerticalSide side : VerticalSide.values()) {
-            final boolean lookAbove = side == VerticalSide.TOP;
-            AbstractChordInter chord = lookAbove ? stack.getStandardChordAbove(
-                    center,
-                    widenedBounds) : stack.getStandardChordBelow(center, widenedBounds);
+            if (side == VerticalSide.TOP && !aboveStaff) {
+                continue;
+            }
+
+            if (side == VerticalSide.BOTTOM && !belowStaff) {
+                continue;
+            }
+
+            AbstractChordInter chord = (side == VerticalSide.TOP) //
+                    ? stack.getStandardChordAbove(center, widenedBounds)
+                    : stack.getStandardChordBelow(center, widenedBounds);
 
             if ((chord == null) || chord instanceof RestChordInter) {
                 continue;
@@ -290,7 +306,7 @@ public class DynamicsInter
 
             // If chord is mirrored, select the closest vertically
             if (chord.getMirror() != null) {
-                double dyMirror = GeoUtil.yGap(widenedBounds, chord.getMirror().getBounds());
+                final double dyMirror = GeoUtil.yGap(widenedBounds, chord.getMirror().getBounds());
 
                 if (dyMirror < dyChord) {
                     dyChord = dyMirror;
@@ -305,7 +321,9 @@ public class DynamicsInter
             // Check vertical distance between element and chord
             if (dyChord > maxDy) {
                 // Check vertical distance between element and staff
-                final Staff chordStaff = lookAbove ? chord.getBottomStaff() : chord.getTopStaff();
+                final Staff chordStaff = (side == VerticalSide.TOP) //
+                        ? chord.getBottomStaff()
+                        : chord.getTopStaff();
                 final double dyStaff = chordStaff.gapTo(widenedBounds);
 
                 if (dyStaff > maxDy) {

@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -164,7 +164,7 @@ public class Page
     /**
      * Browse this page to determine the global page duration divisor.
      * <p>
-     * TODO: Here we retrieve divisor for the page. We could work on each part only.
+     * TODO: Here we retrieve divisor for the page. We could work on each part separately.
      *
      * @return the page duration divisor
      */
@@ -173,13 +173,18 @@ public class Page
         try {
             final SortedSet<Rational> durations = new TreeSet<>();
 
+            // We must make sure that a quarter can be expressed with the chosen division value
+            // Because the MusicXML division value is stated as the duration of one quarter (1/4)
+            durations.add(Rational.QUARTER);
+
             // Collect duration values for each standard chord in this page
             for (SystemInfo system : getSystems()) {
                 for (MeasureStack stack : system.getStacks()) {
                     for (AbstractChordInter chord : stack.getStandardChords()) {
                         try {
-                            final Rational duration = chord.isMeasureRest() ? stack
-                                    .getExpectedDuration() : chord.getDuration();
+                            final Rational duration = chord.isMeasureRest() //
+                                    ? stack.getExpectedDuration()
+                                    : chord.getDuration();
 
                             if (duration != null) {
                                 durations.add(duration);
@@ -193,10 +198,10 @@ public class Page
                 }
             }
 
-            // Compute greatest duration divisor for the page
-            Rational[] durationArray = durations.toArray(new Rational[durations.size()]);
-            Rational divisor = Rational.gcd(durationArray);
-            logger.debug("durations={} divisor={}", Arrays.deepToString(durationArray), divisor);
+            // Compute the greatest duration divisor for the page
+            final Rational[] durationArray = durations.toArray(Rational[]::new);
+            final Rational divisor = Rational.gcd(durationArray);
+            logger.info("durations={} gcd={}", Arrays.deepToString(durationArray), divisor);
 
             return divisor.den;
         } catch (Exception ex) {
@@ -701,11 +706,11 @@ public class Page
      * the page.
      *
      * @param value the raw duration
-     * @return the simple duration expression, in the param of proper divisions
+     * @return the simple duration expression, stated in number of proper divisions
      */
     public int simpleDurationOf (Rational value)
     {
-        return value.num * (getDurationDivisor() / value.den);
+        return (value.num * getDurationDivisor()) / value.den;
     }
 
     //----------//

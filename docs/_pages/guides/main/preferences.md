@@ -7,9 +7,6 @@ nav_order: 2
 
 # Preferences
 {: .no_toc }
-{: .d-inline-block }
-Updated in 5.9
-{: .label .label-green }
 
 The {{ site.tools_preferences }} pull-down menu opens this dialog, 
 focused on on the handling of a few user preferences.  
@@ -28,9 +25,6 @@ Table of contents
 ---
 
 ## Standard processing options
-{: .d-inline-block }
-New in 5.9
-{: .label .label-yellow }
 
 These options impact the way the engine can work, especially for demanding scores.
 - The **SWAPPED_SHEETS** option determines whether the engine should save a sheet to disk
@@ -46,6 +40,9 @@ which is 13 of the 20 defined steps. The overall transcription time saving is ap
 A drawback of this approach is that the results are not strictly reproducible, 
 since the systems compete for allocating and naming entities like
 [Inter](../../tutorials/main_concepts/glyph_inter.md#inter) instances.  
+This option is disabled by default.
+
+- The **MULTIPLE_DELETE** option determines whether the user can delete several Inters without confirmation.  
 This option is disabled by default.
 
 ## Early steps
@@ -86,9 +83,16 @@ As of this writing, the available locales are:
 The new locale is applied at the next restart.
 
 ## Advanced options
+{: .d-inline-block }
+updated for 5.11
+{: .label .label-green}
 
  Each of these options can gather several related features.
 
+- **CUSTOM_SHAPE_SET** deals with the user customized shape set.
+{: .d-inline-block }
+New in 5.11
+{: .label .label-yellow }
 - **SAMPLES** deals with sample repositories and classifier training.
 - **ANNOTATIONS** deals with the production of symbol annotations.
 - **PLOTS** deals with the display of plots for scale, stem, staff or header projections.

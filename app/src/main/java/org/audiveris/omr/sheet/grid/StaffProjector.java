@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -1706,7 +1706,7 @@ public class StaffProjector
         private final Scale.Fraction maxBarWidth = new Scale.Fraction(1.5, "Maximum bar width");
 
         private final Scale.Fraction maxLeftExtremum = new Scale.Fraction(
-                0.15,
+                1.0, // Was 0.15
                 "Maximum length between actual lines left end and left ending bar");
 
         private final Scale.Fraction maxRightExtremum = new Scale.Fraction(

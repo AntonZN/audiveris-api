@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -25,6 +25,7 @@ import org.audiveris.omr.glyph.Shape;
 import org.audiveris.omr.glyph.ShapeSet;
 import org.audiveris.omr.ui.OmrGui;
 import org.audiveris.omr.ui.symbol.MusicFamily;
+import org.audiveris.omr.ui.util.UIUtil;
 
 import org.jdesktop.application.Application;
 import org.jdesktop.application.ResourceMap;
@@ -156,6 +157,7 @@ public class ShapeColorChooser
     {
         if (frame == null) {
             frame = new JFrame();
+            UIUtil.addResizeWorkaround(frame);
             frame.setName("ShapeColorChooserFrame");
             frame.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
 

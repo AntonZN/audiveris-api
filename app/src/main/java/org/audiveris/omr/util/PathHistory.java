@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -33,7 +33,7 @@ import java.nio.file.Paths;
  * @author Hervé Bitteur
  */
 public class PathHistory
-        extends AbstractHistory<Path>
+        extends AbstractNameHistory<Path>
 {
     //~ Constructors -------------------------------------------------------------------------------
 

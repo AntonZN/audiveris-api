@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -61,6 +61,11 @@ public class Sample
     Integer.compare(
             s1.getShape().getPhysicalShape().ordinal(),
             s2.getShape().getPhysicalShape().ordinal());
+
+    /** For comparing Sample instances by alphabetical shape name. */
+    public static final Comparator<Sample> byShapeName = (s1,
+                                                          s2) -> //
+    s1.getShape().name().compareTo(s2.getShape().name());
 
     /** For comparing Sample instances by normalized width. */
     public static final Comparator<Sample> byNormalizedWidth = (s1,

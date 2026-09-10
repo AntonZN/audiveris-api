@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -158,8 +158,7 @@ public class StickFactory
         final Set<Section> members = fil.getMembers();
         final Set<Section> stickers = new LinkedHashSet<>();
 
-        for (boolean reverse : new boolean[]
-        { true, false }) {
+        for (boolean reverse : new boolean[] { true, false }) {
             for (Section s : members) {
                 LinkedSection ls = (LinkedSection) s;
 
@@ -496,8 +495,7 @@ public class StickFactory
 
             // Look on source side, then on target side
             SideLoop:
-            for (boolean reverse : new boolean[]
-            { true, false }) {
+            for (boolean reverse : new boolean[] { true, false }) {
                 if (TRUE.equals(finished.get(reverse))) {
                     continue;
                 }

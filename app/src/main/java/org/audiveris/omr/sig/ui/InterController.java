@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -74,15 +74,18 @@ import org.audiveris.omr.sig.inter.LyricItemInter;
 import org.audiveris.omr.sig.inter.LyricLineInter;
 import org.audiveris.omr.sig.inter.MetronomeInter;
 import org.audiveris.omr.sig.inter.OctaveShiftInter;
+import org.audiveris.omr.sig.inter.RehearsalInter;
 import org.audiveris.omr.sig.inter.SentenceInter;
 import org.audiveris.omr.sig.inter.SlurInter;
 import org.audiveris.omr.sig.inter.StaffBarlineInter;
 import org.audiveris.omr.sig.inter.StemInter;
 import org.audiveris.omr.sig.inter.TimeCustomInter;
+import org.audiveris.omr.sig.inter.WedgeInter;
 import org.audiveris.omr.sig.inter.WordInter;
 import org.audiveris.omr.sig.relation.AugmentationRelation;
 import org.audiveris.omr.sig.relation.BarConnectionRelation;
 import org.audiveris.omr.sig.relation.BeamStemRelation;
+import org.audiveris.omr.sig.relation.ChordWedgeRelation;
 import org.audiveris.omr.sig.relation.Containment;
 import org.audiveris.omr.sig.relation.FlagStemRelation;
 import org.audiveris.omr.sig.relation.HeadStemRelation;
@@ -103,6 +106,7 @@ import org.audiveris.omr.text.TextBuilder;
 import org.audiveris.omr.text.TextLine;
 import org.audiveris.omr.text.TextRole;
 import org.audiveris.omr.text.TextWord;
+import org.audiveris.omr.ui.action.AdvancedTopics;
 import org.audiveris.omr.ui.selection.LocationEvent;
 import static org.audiveris.omr.ui.selection.MouseMovement.PRESSING;
 import org.audiveris.omr.ui.selection.SelectionHint;
@@ -212,8 +216,15 @@ public class InterController
     //----------//
     /**
      * Add one inter.
+     * <p>
+     * If a HeadInter is replacing a HeadInter, we must salvage items of the to-be-replaced head:
+     * <ul>
+     * <li>the AugmentationRelation if any
+     * <li>the SlurHeadRelation(s) if any
+     * <li>the containing HeadChordInter if any
+     * </ul>
      *
-     * @param inter the inter to add (staff and bounds are already set)
+     * @param inter the inter to add (staff and bounds are already set).
      */
     @UIThread
     public void addInter (final Inter inter)
@@ -223,12 +234,59 @@ public class InterController
             @Override
             protected void build ()
             {
+                final List<UITask> recoveredTasks = new ArrayList<>();
+                HeadInter headCompetitor = null;
+
+                if (inter instanceof org.audiveris.omr.sig.inter.HeadInter) {
+                    final SIGraph sig = inter.getStaff().getSystem().getSig();
+                    final List<Inter> intersected = sig.intersectedInters(inter.getBounds());
+
+                    for (Inter comp : intersected) {
+                        if ((comp != inter) //
+                                && (comp.getGlyph() == inter.getGlyph())
+                                && (comp instanceof HeadInter head)) {
+                            headCompetitor = head;
+
+                            for (Relation rel : sig.incomingEdgesOf(head)) {
+                                if (rel instanceof AugmentationRelation) {
+                                    final Inter dot = sig.getEdgeSource(rel);
+                                    final Relation newRel = new AugmentationRelation();
+                                    recoveredTasks.add(new LinkTask(sig, dot, inter, newRel));
+                                } else if (rel instanceof SlurHeadRelation) {
+                                    final Inter slur = sig.getEdgeSource(rel);
+                                    final Relation newRel = new SlurHeadRelation();
+                                    recoveredTasks.add(new LinkTask(sig, slur, inter, newRel));
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // If glyph is used by another inter, delete this other inter
+                // (This may include the removal of the containing chord of the other inter)
                 removeCompetitors(inter, inter.getGlyph(), seq);
 
                 // Addition task and other related tasks (additions, links) if any
                 final WrappedBoolean cancel = new WrappedBoolean(false);
                 seq.addAll(inter.preAdd(cancel, toPublish));
+
+                // Make sure the containing chord of headCompetitor, if any, is not removed
+                if ((inter instanceof HeadInter) && (headCompetitor != null)) {
+                    final HeadChordInter chord = headCompetitor.getChord();
+
+                    if (chord != null) {
+                        for (Iterator<UITask> it = seq.getTasks().iterator(); it.hasNext();) {
+                            final UITask task = it.next();
+
+                            if ((task instanceof RemovalTask removal) && (removal.inter == chord)) {
+                                it.remove();
+                            }
+                        }
+                    }
+                }
+
+                // Re-apply the salvaged links
+                seq.addAll(recoveredTasks);
 
                 if (cancel.isSet()) {
                     seq.setCancelled(true);
@@ -298,7 +356,7 @@ public class InterController
 
                 // Convert to absolute lines (and the underlying word glyphs)
                 final TextBuilder textBuilder = new TextBuilder(system, shape);
-                final List<TextLine> glyphLines = textBuilder.processGlyph(
+                final List<TextLine> glyphLines = textBuilder.processBuffer(
                         buffer,
                         relativeLines,
                         glyph.getTopLeft());
@@ -772,6 +830,31 @@ public class InterController
                         }
                     }
 
+                    case Rehearsal -> {
+                        // Convert to rehearsal mark, with an enclosure
+                        final RehearsalInter rehearsal = new RehearsalInter(sentence);
+                        final Staff stf = system.getStaffAtOrBelow(sentence.getCenter());
+                        rehearsal.setStaff((stf != null) ? stf : sentence.getStaff());
+                        rehearsal.setManual(true);
+                        seq.add(
+                                new AdditionTask(
+                                        sig,
+                                        rehearsal,
+                                        rehearsal.getBounds(),
+                                        Collections.emptyList()));
+
+                        // Migrate the members from sentence to rehearsal
+                        final List<Inter> members = sentence.getMembers();
+
+                        // Remove former sentence (and its links to members)
+                        seq.add(new RemovalTask(sentence));
+
+                        for (Inter member : members) {
+                            member.setManual(true);
+                            seq.add(new LinkTask(sig, rehearsal, member, new Containment()));
+                        }
+                    }
+
                     default -> {
                         // Convert to SentenceInter if so needed
                         final SentenceInter finalSentence;
@@ -834,6 +917,35 @@ public class InterController
             protected void publish ()
             {
                 sheet.getInterIndex().publish(!sentence.isRemoved() ? sentence : null);
+            }
+        }.execute();
+    }
+
+    //--------------------------//
+    // changeSentenceAttributes //
+    //--------------------------//
+    /**
+     * Change the font attributes for a whole sentence.
+     *
+     * @param sentence the sentence to modify
+     * @param newAttrs the new font attributes
+     */
+    @UIThread
+    public void changeSentenceAttributes (final SentenceInter sentence,
+                                          final String newAttrs)
+    {
+        new CtrlTask(DO, "changeSentenceAttributes")
+        {
+            @Override
+            protected void build ()
+            {
+                seq.add(new SentenceAttributesTask(sentence, newAttrs));
+            }
+
+            @Override
+            protected void publish ()
+            {
+                sheet.getInterIndex().publish(sentence);
             }
         }.execute();
     }
@@ -1516,6 +1628,27 @@ public class InterController
         }.execute();
     }
 
+    //---------------------//
+    // toggleIndentation   //
+    //---------------------//
+    /**
+     * Toggle the indentation (movement start) flag on the provided system.
+     *
+     * @param system the system to toggle
+     */
+    @UIThread
+    public void toggleIndentation (final SystemInfo system)
+    {
+        new CtrlTask(DO, "toggleIndentation")
+        {
+            @Override
+            protected void build ()
+            {
+                seq.add(new SystemIndentTask(system));
+            }
+        }.execute();
+    }
+
     //----------------//
     // partitionHeads //
     //----------------//
@@ -1844,19 +1977,32 @@ public class InterController
             final SlurInter slur = (SlurInter) source;
             final HeadInter head = (HeadInter) target;
             final HorizontalSide side = (head.getCenter().x < slur.getCenter().x) ? LEFT : RIGHT;
-            final SlurHeadRelation existingRel = slur.getHeadRelation(side);
-            final SlurInter extension = slur.getExtension(side);
 
+            final SlurHeadRelation existingRel = slur.getHeadRelation(side);
             if (existingRel != null) {
                 toRemove.add(existingRel);
             }
 
+            final SlurInter extension = slur.getExtension(side);
             if (extension != null) {
                 seq.add(
                         new DisconnectTask(
                                 (side == RIGHT) ? slur : extension,
                                 (side == RIGHT) ? extension : slur,
                                 ConnectionTask.Kind.SLUR_CONNECTION));
+            }
+        }
+
+        if (relation instanceof ChordWedgeRelation) {
+            // This relation is declared multi-source & single-target
+            // But is single source (chord) for each given horizontal side
+            final AbstractChordInter chord = (AbstractChordInter) source;
+            final WedgeInter wedge = (WedgeInter) target;
+            final HorizontalSide side = (chord.getCenter().x < wedge.getCenter().x) ? LEFT : RIGHT;
+            final ChordWedgeRelation existingRel = wedge.getChordRelation(side);
+
+            if (existingRel != null) {
+                toRemove.add(existingRel);
             }
         }
 
@@ -2508,9 +2654,11 @@ public class InterController
                 return;
             }
 
-            if ((inters.size() == 1) || OMR.gui.displayConfirmation(
-                    "Do you confirm this multiple deletion?",
-                    "Deletion of " + inters.size() + " inters")) {
+            if ((inters.size() == 1) //
+                    || AdvancedTopics.allowMultipleDelete() //
+                    || OMR.gui.displayConfirmation(
+                            "Do you confirm this multiple deletion?",
+                            "Deletion of " + inters.size() + " inters")) {
                 removeInters(inters);
             }
         }

@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -67,6 +67,7 @@ import org.audiveris.omr.sig.inter.MetronomeInter;
 import org.audiveris.omr.sig.inter.MultipleRestInter;
 import org.audiveris.omr.sig.inter.MusicWordInter;
 import org.audiveris.omr.sig.inter.OctaveShiftInter;
+import org.audiveris.omr.sig.inter.RehearsalInter;
 import org.audiveris.omr.sig.inter.RestInter;
 import org.audiveris.omr.sig.inter.SentenceInter;
 import org.audiveris.omr.sig.inter.SlurInter;
@@ -1588,11 +1589,12 @@ public abstract class SheetPainter
         @Override
         public void visit (RestInter rest)
         {
-            switch (rest.getShape()) {
-                default -> paintPitched(rest, rest);
-                // Symbols for these shapes are not aligned with pitch ordinate, so we use area center
-                case HALF_REST, WHOLE_REST, BREVE_REST -> paintCenter(rest, rest);
-            }
+            paintCenter(rest, rest); // We impose to use the area center, with no pitch impact
+            //            switch (rest.getShape()) {
+            //                default -> paintPitched(rest, rest);
+            //                // Symbols for these shapes are not aligned with pitch ordinate, so we use area center
+            //                case HALF_REST, WHOLE_REST, BREVE_REST -> paintCenter(rest, rest);
+            //            }
         }
 
         //-------//
@@ -1601,6 +1603,15 @@ public abstract class SheetPainter
         @Override
         public void visit (SentenceInter sentence)
         {
+            if (sentence instanceof RehearsalInter rehearsal) {
+                // Draw the enclosure if any
+                final Rectangle enclosure = rehearsal.getEnclosure();
+                if (enclosure != null) {
+                    setColor(rehearsal);
+                    g.setStroke(curveStroke);
+                    g.draw(enclosure);
+                }
+            }
             //            final FontInfo lineMeanFont = sentence.getMeanFont();
             //            for (Inter member : sentence.getMembers()) {
             //                WordInter word = (WordInter) member;

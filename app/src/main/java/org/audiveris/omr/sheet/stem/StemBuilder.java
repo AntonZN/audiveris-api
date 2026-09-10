@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -73,6 +73,7 @@ import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -1045,39 +1046,49 @@ public class StemBuilder
                                    List<? extends StemLinker> targetLinkers,
                                    int maxStemProfile)
     {
-        if (startLinker.getSource().isVip()) {
-            logger.info("VIP {} retrieveAllItems stemProfile:{}", startLinker, maxStemProfile);
+        try {
+            if (startLinker.getSource().isVip()) {
+                logger.info("VIP {} retrieveAllItems stemProfile:{}", startLinker, maxStemProfile);
+            }
+
+            // Initial linker
+            final Glyph startGlyph = startLinker.getStump();
+            Rectangle startBox = null;
+
+            if (startGlyph != null) {
+                startBox = startGlyph.getBounds();
+            }
+
+            items.add(
+                    new HalfLinkerItem(
+                            startLinker,
+                            (startGlyph != null) ? getContrib(startBox) : 0));
+
+            // Include filtered seeds and stumps
+            items.addAll(filter(startBox, seeds, targetLinkers));
+
+            // Look for additional chunks built out of vertical sections found.
+            final List<Glyph> chunks = lookupChunks(seeds);
+
+            for (Glyph chunk : chunks) {
+                items.add(new GlyphItem(chunk, getContrib(chunk.getBounds())));
+            }
+
+            sortItems(items.subList(1, items.size()));
+
+            if (saveConnections() && startLinker.getSource().isVip()) {
+                saveConnection(startLinker, startGlyph, chunks);
+            }
+
+            insertGapEvents(maxStemProfile);
+
+            logger.debug("{}", this);
+        } catch (Exception ex) {
+            logger.warn("StemBuilder. Error in retrieveAllItems {}", ex.getMessage(), ex);
+            logger.warn("StemBuilder. {}", startLinker);
+
+            items.clear(); // Safer!
         }
-
-        // Initial linker
-        final Glyph startGlyph = startLinker.getStump();
-        Rectangle startBox = null;
-
-        if (startGlyph != null) {
-            startBox = startGlyph.getBounds();
-        }
-
-        items.add(new HalfLinkerItem(startLinker, (startGlyph != null) ? getContrib(startBox) : 0));
-
-        // Include filtered seeds and stumps
-        items.addAll(filter(startBox, seeds, targetLinkers));
-
-        // Look for additional chunks built out of vertical sections found.
-        final List<Glyph> chunks = lookupChunks(seeds);
-
-        for (Glyph chunk : chunks) {
-            items.add(new GlyphItem(chunk, getContrib(chunk.getBounds())));
-        }
-
-        sortItems(items.subList(1, items.size()));
-
-        if (saveConnections() && startLinker.getSource().isVip()) {
-            saveConnection(startLinker, startGlyph, chunks);
-        }
-
-        insertGapEvents(maxStemProfile);
-
-        logger.debug("{}", this);
     }
 
     //-----------------//
@@ -1141,29 +1152,47 @@ public class StemBuilder
      */
     private void sortItems (List<? extends StemItem> list)
     {
-        //        logger.info("StemBuilder {}", this);
-        //        for (StemItem item : list) {
-        //            logger.info("   {}", item);
-        //        }
-        Collections.sort(
-                list,
-                (se1,
-                 se2) ->
-                {
-                    // Linker pairs are sorted on their refPt ordinate
-                    if (se1 instanceof HalfLinkerItem hl1) {
-                        if (se2 instanceof HalfLinkerItem hl2) {
-                            final Point2D p1 = hl1.linker.getReferencePoint();
-                            final Point2D p2 = hl2.linker.getReferencePoint();
-                            return yDir * Double.compare(p1.getY(), p2.getY());
-                        }
-                    }
+        Collections.sort(list, ordinateComparator(yDir));
+    }
 
-                    // Others are sorted on their line starting ordinate
-                    return (yDir > 0) //
-                            ? Double.compare(se1.line.getY1(), se2.line.getY1())
-                            : Double.compare(se2.line.getY2(), se1.line.getY2());
-                });
+    //--------------------//
+    // ordinateComparator //
+    //--------------------//
+    /**
+     * Report the comparator used to sort stem items along the provided yDir.
+     * <p>
+     * Each item is compared via a single ordinate key, whatever the other item in the pair,
+     * so that the comparator is transitive as required by the sorting contract.
+     *
+     * @param yDir the desired vertical direction
+     * @return the item comparator
+     */
+    static Comparator<StemItem> ordinateComparator (int yDir)
+    {
+        return (se1,
+                se2) -> yDir * Double.compare(ordinateKeyOf(se1, yDir), ordinateKeyOf(se2, yDir));
+    }
+
+    //---------------//
+    // ordinateKeyOf //
+    //---------------//
+    /**
+     * Report the ordinate key used to sort the provided item along yDir.
+     *
+     * @param item the item to evaluate
+     * @param yDir the desired vertical direction
+     * @return the item sorting ordinate
+     */
+    private static double ordinateKeyOf (StemItem item,
+                                         int yDir)
+    {
+        // A half linker item is located on its refPt ordinate
+        if (item instanceof HalfLinkerItem hl) {
+            return hl.linker.getReferencePoint().getY();
+        }
+
+        // Others are located on their line starting ordinate (line is oriented top down)
+        return (yDir > 0) ? item.line.getY1() : item.line.getY2();
     }
 
     //----------//
