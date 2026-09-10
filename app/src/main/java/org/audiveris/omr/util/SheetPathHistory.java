@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -31,7 +31,7 @@ import java.nio.file.Path;
  * @author Hervé Bitteur
  */
 public class SheetPathHistory
-        extends AbstractHistory<SheetPath>
+        extends AbstractNameHistory<SheetPath>
 {
     //~ Constructors -------------------------------------------------------------------------------
 
@@ -82,6 +82,14 @@ public class SheetPathHistory
     //---------------//
     // areEquivalent //
     //---------------//
+    /**
+     * To keep only the latest sheet number visited in a book, we consider that two
+     * SheetPath instances are equivalent if their book paths are identical.
+     *
+     * @param s1 a sheet path
+     * @param s2 another sheet path
+     * @return true if their book paths are identical
+     */
     private static boolean areEquivalent (String s1,
                                           String s2)
     {

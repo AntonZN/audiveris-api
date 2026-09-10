@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -23,7 +23,7 @@ package org.audiveris.omr.ui.view;
 
 import org.audiveris.omr.sheet.ui.BookActions.LoadBookTask;
 import org.audiveris.omr.ui.OmrGui;
-import org.audiveris.omr.util.AbstractHistory;
+import org.audiveris.omr.util.AbstractNameHistory;
 import org.audiveris.omr.util.SheetPath;
 
 import org.jdesktop.application.ResourceMap;
@@ -51,7 +51,7 @@ public class HistoryMenu
     //~ Instance fields ----------------------------------------------------------------------------
 
     /** Underlying path history. */
-    protected final AbstractHistory history;
+    protected final AbstractNameHistory history;
 
     /** Task class launched on selected path. */
     protected final Class<? extends LoadBookTask> pathTaskClass;
@@ -67,7 +67,7 @@ public class HistoryMenu
      * @param history       the underlying path history
      * @param pathTaskClass the task launched to process the selected path
      */
-    public HistoryMenu (AbstractHistory history,
+    public HistoryMenu (AbstractNameHistory history,
                         Class<? extends LoadBookTask> pathTaskClass)
     {
         this.history = history;

@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -28,17 +28,24 @@ import org.audiveris.omr.glyph.Shape;
 import org.audiveris.omr.math.PointUtil;
 import org.audiveris.omr.sheet.Scale;
 import org.audiveris.omr.sheet.Sheet;
+import org.audiveris.omr.sheet.Staff;
 import org.audiveris.omr.sheet.SystemInfo;
 import org.audiveris.omr.sheet.rhythm.MeasureStack;
 import org.audiveris.omr.sheet.ui.ObjectUIModel;
 import org.audiveris.omr.sig.GradeImpacts;
 import org.audiveris.omr.sig.relation.ChordWedgeRelation;
 import org.audiveris.omr.sig.relation.Link;
+import org.audiveris.omr.sig.relation.Relation;
 import org.audiveris.omr.sig.ui.InterEditor;
 import org.audiveris.omr.ui.symbol.MusicFont;
 import org.audiveris.omr.ui.symbol.ShapeSymbol;
 import org.audiveris.omr.util.HorizontalSide;
+import static org.audiveris.omr.util.HorizontalSide.LEFT;
+import static org.audiveris.omr.util.HorizontalSide.RIGHT;
 import org.audiveris.omr.util.Jaxb;
+import org.audiveris.omr.util.VerticalSide;
+import static org.audiveris.omr.util.VerticalSide.BOTTOM;
+import static org.audiveris.omr.util.VerticalSide.TOP;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,6 +59,7 @@ import java.awt.geom.Rectangle2D;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.TreeMap;
 
 import javax.xml.bind.annotation.XmlAccessType;
 import javax.xml.bind.annotation.XmlAccessorType;
@@ -267,7 +275,7 @@ public class WedgeInter
     // getSpread //
     //-----------//
     /**
-     * Report vertical gap between ending points or provided side.
+     * Report vertical gap between ending points on the provided horizontal side.
      *
      * @param side provided horizontal side
      * @return vertical gap in pixels
@@ -281,46 +289,158 @@ public class WedgeInter
         }
     }
 
+    //----------//
+    // getChord //
+    //----------//
+    /**
+     * Report the chord linked to this wedge on the provided horizontal side.
+     *
+     * @param side the provided side
+     * @return the linked chord, if any, otherwise null
+     */
+    public AbstractChordInter getChord (HorizontalSide side)
+    {
+        if (sig != null) {
+            for (Relation rel : sig.edgesOf(this)) {
+                if (rel instanceof ChordWedgeRelation chordWedgeRelation) {
+                    if (chordWedgeRelation.getSide() == side) {
+                        return (AbstractChordInter) sig.getOppositeInter(this, rel);
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    //-----------------//
+    //getChordRelation //
+    //-----------------//
+    /**
+     * Report the relation to chord, if any, on the specified side.
+     *
+     * @param side the desired side
+     * @return the relation found or null
+     */
+    public ChordWedgeRelation getChordRelation (HorizontalSide side)
+    {
+        for (Relation rel : sig.getRelations(this, ChordWedgeRelation.class)) {
+            final ChordWedgeRelation cwRel = (ChordWedgeRelation) rel;
+
+            if (cwRel.getSide() == side) {
+                return cwRel;
+            }
+        }
+
+        return null;
+    }
+
+    //--------//
+    // lookup //
+    //--------//
+    /**
+     * Look for a link to a suitable chord.
+     *
+     * @param system the containing system
+     * @param hSide  the left or the right side of the wedge to consider
+     * @param vSide  looking up or down from the wedge
+     * @return the suitable link found, null otherwise
+     */
+    private Link lookup (SystemInfo system,
+                         HorizontalSide hSide,
+                         VerticalSide vSide)
+    {
+        final Line2D line = (vSide == TOP) ? l1 : l2;
+        final Point2D end = (hSide == LEFT) ? line.getP1() : line.getP2();
+        final Scale scale = system.getSheet().getScale();
+        MeasureStack stack = system.getStackAt(end);
+
+        if (stack == null) {
+            // Perhaps a bit beyond staff limit abscissa?
+            final double xMargin = scale.toPixels(constants.stackAbscissaMargin);
+            final Point2D end2 = new Point2D.Double(
+                    end.getX() + ((hSide == LEFT) ? xMargin : -xMargin),
+                    end.getY());
+            stack = system.getStackAt(end2);
+        }
+
+        if (stack != null) {
+            // Lookup window for abscissa inclusion (and for unused ordinate exclusion)
+            final Rectangle box = new Rectangle(
+                    (int) Math.rint(end.getX()),
+                    (int) Math.rint(end.getY()),
+                    0,
+                    0);
+            box.grow(scale.toPixels(constants.maxXGap), 0);
+
+            final AbstractChordInter chord = (vSide == TOP) //
+                    ? stack.getStandardChordAbove(end, box)
+                    : stack.getStandardChordBelow(end, box);
+
+            if (chord != null) {
+                return new Link(chord, new ChordWedgeRelation(hSide), false);
+            }
+        }
+
+        return null;
+    }
+
     //-------------//
     // searchLinks //
     //-------------//
+    /**
+     * We look for chords at left and right sides, both above or both below the wedge.
+     * Note: Perhaps we should look for non-rest chords only.
+     *
+     * @param system the containing system
+     * @return the links found, perhaps empty
+     */
     @Override
     public Collection<Link> searchLinks (SystemInfo system)
     {
-        final Scale scale = system.getSheet().getScale();
-        final Line2D topLine = getLine1();
-        final List<Link> links = new ArrayList<>();
+        final TreeMap<HorizontalSide, Link> map = new TreeMap<>();
 
-        for (HorizontalSide side : HorizontalSide.values()) {
-            final Point2D end = (side == HorizontalSide.LEFT) ? topLine.getP1() : topLine.getP2();
-            MeasureStack stack = system.getStackAt(end);
+        if (staff != null) {
+            // Look for chord within that staff only
+            final Point wedgeCenter = getCenter();
+            final double yStaff = staff.getMidLine().yAt(wedgeCenter.x);
 
-            if (stack == null) {
-                // Perhaps a bit beyond staff limit abscissa?
-                final double xMargin = scale.toPixels(constants.stackAbscissaMargin);
-                final Point2D end2 = new Point2D.Double(
-                        end.getX() + ((side == HorizontalSide.LEFT) ? xMargin : -xMargin),
-                        end.getY());
-                stack = system.getStackAt(end2);
-            }
-
-            if (stack == null) {
-                continue;
-            }
-
-            final AbstractChordInter chordAbove = stack.getStandardChordAbove(end, null);
-
-            if (chordAbove != null) {
-                links.add(new Link(chordAbove, new ChordWedgeRelation(side), false));
+            if (yStaff <= wedgeCenter.y) {
+                // Look above
+                for (HorizontalSide hSide : HorizontalSide.values()) {
+                    map.put(hSide, lookup(system, hSide, TOP));
+                }
             } else {
-                final AbstractChordInter chordBelow = stack.getStandardChordBelow(end, null);
-
-                if (chordBelow != null) {
-                    links.add(new Link(chordBelow, new ChordWedgeRelation(side), false));
-                } else {
-                    logger.debug("No chord for {} {}", this, side);
+                // Look below
+                for (HorizontalSide hSide : HorizontalSide.values()) {
+                    map.put(hSide, lookup(system, hSide, BOTTOM));
                 }
             }
+        } else {
+            // Look above
+            for (HorizontalSide hSide : HorizontalSide.values()) {
+                map.put(hSide, lookup(system, hSide, TOP));
+            }
+
+            if (map.get(LEFT) == null || map.get(RIGHT) == null) {
+                map.clear();
+
+                // Then look below if needed
+                for (HorizontalSide hSide : HorizontalSide.values()) {
+                    map.put(hSide, lookup(system, hSide, BOTTOM));
+                }
+            }
+        }
+
+        // Collect the links
+        final List<Link> links = new ArrayList<>();
+
+        if (map.get(LEFT) != null) {
+            links.add(map.get(LEFT));
+        }
+
+        if (map.get(RIGHT) != null) {
+            links.add(map.get(RIGHT));
         }
 
         return links;
@@ -394,6 +514,10 @@ public class WedgeInter
                 1.0,
                 "Margin beyond stack abscissa limits");
 
+        private final Scale.Fraction maxXGap = new Scale.Fraction(
+                2.0,
+                "Maximum horizontal gap between wedge side and related chord");
+
         private final Constant.Double defaultThickness = new Constant.Double(
                 "pixels",
                 3.0,
@@ -421,6 +545,8 @@ public class WedgeInter
     private static class Editor
             extends InterEditor
     {
+        private final List<Staff> staves;
+
         private final Model originalModel;
 
         private final Model model;
@@ -438,8 +564,10 @@ public class WedgeInter
         {
             super(wedge);
 
-            originalModel = new Model(wedge.getLine1(), wedge.getLine2());
-            model = new Model(wedge.l1, wedge.l2);
+            staves = wedge.getSig().getSystem().getStaves();
+
+            originalModel = new Model(wedge.getLine1(), wedge.getLine2(), wedge.getStaff());
+            model = new Model(wedge.l1, wedge.l2, wedge.getStaff());
 
             mid1 = PointUtil.middle(model.top1, model.bot1);
             mid2 = PointUtil.middle(model.top2, model.bot2);
@@ -459,6 +587,14 @@ public class WedgeInter
                     // Handles
                     for (InterEditor.Handle handle : handles) {
                         PointUtil.add(handle.getPoint(), dx, dy);
+                    }
+
+                    // Within a staff?
+                    for (Staff staff : staves) {
+                        if (staff.contains(middle)) {
+                            model.staff = staff;
+                            break;
+                        }
                     }
 
                     return true;
@@ -539,6 +675,7 @@ public class WedgeInter
             final WedgeInter wedge = (WedgeInter) inter;
             wedge.l1.setLine(model.top1, model.top2);
             wedge.l2.setLine(model.bot1, model.bot2);
+            wedge.setStaff(model.staff);
 
             inter.setBounds(null);
             super.doit(); // No more glyph
@@ -568,6 +705,7 @@ public class WedgeInter
 
             wedge.l1.setLine(originalModel.top1, originalModel.top2);
             wedge.l2.setLine(originalModel.bot1, originalModel.bot2);
+            wedge.setStaff(originalModel.staff);
 
             inter.setBounds(null);
             super.undo();
@@ -580,11 +718,10 @@ public class WedgeInter
     public static class Impacts
             extends GradeImpacts
     {
-        private static final String[] NAMES = new String[]
-        { "s1", "s2", "closedDy", "openDy", "openBias", "width" };
+        private static final String[] NAMES = new String[] { "s1", "s2", "closedDy", "openDy",
+                "openBias", "width" };
 
-        private static final double[] WEIGHTS = new double[]
-        { 1, 1, 1, 1, 1, 1 };
+        private static final double[] WEIGHTS = new double[] { 1, 1, 1, 1, 1, 1 };
 
         public Impacts (double s1,
                         double s2,
@@ -617,13 +754,17 @@ public class WedgeInter
 
         public final Point2D bot2;
 
+        public Staff staff;
+
         public Model (Line2D l1,
-                      Line2D l2)
+                      Line2D l2,
+                      Staff staff)
         {
             top1 = l1.getP1();
             top2 = l1.getP2();
             bot1 = l2.getP1();
             bot2 = l2.getP2();
+            this.staff = staff;
         }
 
         @Override

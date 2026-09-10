@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -180,8 +180,9 @@ public class ValidationPanel
                 Trainer.FIELD_WIDTH);
         final FormBuilder builder = FormBuilder.create().layout(layout).panel(component);
 
+        int r = 1; // -------------------------
+
         // Validation title & progress bar
-        int r = 1;
         final String title = "Validation [" + setName + " set]";
         builder.addSeparator(title).xyw(1, r, 3);
         builder.addRaw(progressBar).xyw(5, r, 7);

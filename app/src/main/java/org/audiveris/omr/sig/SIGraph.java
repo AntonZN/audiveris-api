@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -264,7 +264,7 @@ public class SIGraph
                 throw new RuntimeException("No common interpretation");
             }
 
-            if (ratio > 1) {
+            if ((ratio > 1) && (partner.getGrade()) != null) {
                 partners.add(partner);
                 partnerContrib.put(partner, partner.getGrade() * (ratio - 1));
             }
@@ -281,7 +281,9 @@ public class SIGraph
                 contribution += partnerContrib.get(partner);
             }
 
-            bestCg = Math.max(bestCg, GradeUtil.contextual(inter.getGrade(), contribution));
+            if (inter.getGrade() != null) {
+                bestCg = Math.max(bestCg, GradeUtil.contextual(inter.getGrade(), contribution));
+            }
         }
 
         return bestCg;
@@ -719,10 +721,12 @@ public class SIGraph
     {
         Set<Relation> relations = new LinkedHashSet<>();
 
-        for (Relation rel : edgesOf(inter)) {
-            for (Class classe : classes) {
-                if (classe.isInstance(rel)) {
-                    relations.add(rel);
+        if (!inter.isRemoved()) {
+            for (Relation rel : edgesOf(inter)) {
+                for (Class classe : classes) {
+                    if (classe.isInstance(rel)) {
+                        relations.add(rel);
+                    }
                 }
             }
         }
@@ -745,9 +749,11 @@ public class SIGraph
     {
         Set<Relation> relations = new LinkedHashSet<>();
 
-        for (Relation rel : edgesOf(inter)) {
-            if (classe.isInstance(rel)) {
-                relations.add(rel);
+        if (!inter.isRemoved()) {
+            for (Relation rel : edgesOf(inter)) {
+                if (classe.isInstance(rel)) {
+                    relations.add(rel);
+                }
             }
         }
 
@@ -767,9 +773,11 @@ public class SIGraph
     {
         List<Support> supports = new ArrayList<>();
 
-        for (Relation rel : edgesOf(inter)) {
-            if (rel instanceof Support) {
-                supports.add((Support) rel);
+        if (!inter.isRemoved()) {
+            for (Relation rel : edgesOf(inter)) {
+                if (rel instanceof Support) {
+                    supports.add((Support) rel);
+                }
             }
         }
 

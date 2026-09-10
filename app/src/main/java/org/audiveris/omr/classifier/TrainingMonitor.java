@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -33,13 +33,6 @@ public interface TrainingMonitor //        extends IterationListener
     //~ Methods ------------------------------------------------------------------------------------
 
     /**
-     * Call-back at epoch start.
-     *
-     * @param epoch epoch number.
-     */
-    public void epochStarted (int epoch);
-
-    /**
      * Report the number of iterations in a period.
      *
      * @return number of iterations between reporting
@@ -49,11 +42,15 @@ public interface TrainingMonitor //        extends IterationListener
     /**
      * Call-back at end of iteration period.
      *
-     * @param epochsCount total count of epochs so far
-     * @param iteration   iteration number
-     * @param score       current loss value
+     * @param epochsCount          total count of epochs so far
+     * @param iteration            iteration number
+     * @param score                current loss value
+     * @param hiddenSquaredWeights sum of squared weights for hidden layer
+     * @param outputSquaredWeights sum of squared weights for output layer
      */
     public void iterationPeriodDone (int epochsCount,
                                      int iteration,
-                                     double score);
+                                     double score,
+                                     double hiddenSquaredWeights,
+                                     double outputSquaredWeights);
 }

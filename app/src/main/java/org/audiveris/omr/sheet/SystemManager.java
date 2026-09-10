@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -247,6 +247,27 @@ public class SystemManager
         reportResults();
 
         return true;
+    }
+
+    //--------------//
+    // rebuildPages //
+    //--------------//
+    /**
+     * Clear and rebuild pages and pageRefs based on current system indentation flags,
+     * then update the book scores accordingly.
+     * <p>
+     * This is used after a user manually toggles a system's indentation.
+     */
+    public void rebuildPages ()
+    {
+        final SheetStub stub = sheet.getStub();
+        stub.clearPageRefs();
+        sheet.clearPages();
+        allocatePages();
+        stub.getBook().clearScores();
+        stub.getBook().updateScores(stub);
+
+        reportResults();
     }
 
     //-------------------//

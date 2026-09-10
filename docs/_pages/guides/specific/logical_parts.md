@@ -6,9 +6,6 @@ nav_order: 3
 ---
 # Logical Parts
 {: .no_toc }
-{: .d-inline-block }
-since 5.3
-{: .label }
 
 Mapping the individual parts of every system in every page to logical parts defined at score level
 is a topic where we may have to help the OMR engine.

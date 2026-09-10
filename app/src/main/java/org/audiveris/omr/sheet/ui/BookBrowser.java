@@ -5,7 +5,7 @@
 //------------------------------------------------------------------------------------------------//
 // <editor-fold defaultstate="collapsed" desc="hdr">
 //
-//  Copyright © Audiveris 2025. All rights reserved.
+//  Copyright © Audiveris 2026. All rights reserved.
 //
 //  This program is free software: you can redistribute it and/or modify it under the terms of the
 //  GNU Affero General Public License as published by the Free Software Foundation, either version
@@ -37,6 +37,7 @@ import org.audiveris.omr.ui.OmrGui;
 import org.audiveris.omr.ui.selection.LocationEvent;
 import org.audiveris.omr.ui.selection.MouseMovement;
 import org.audiveris.omr.ui.selection.SelectionHint;
+import org.audiveris.omr.ui.util.UIUtil;
 import org.audiveris.omr.util.Dumper;
 import org.audiveris.omr.util.Dumping.PackageRelevance;
 import org.audiveris.omr.util.Dumping.Relevance;
@@ -192,6 +193,7 @@ public class BookBrowser
         if (frame == null) {
             // Set up a GUI framework
             frame = new JFrame();
+            UIUtil.addResizeWorkaround(frame);
             frame.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
             frame.setName("BookBrowserFrame"); // For SAF life cycle
 
