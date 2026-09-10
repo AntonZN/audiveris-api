@@ -54,9 +54,10 @@ def detect_page(
     gray: np.ndarray,
     staves: list[staff.Staff],
     config: PipelineConfig,
+    lines: list[staff.StaffLine] | None = None,
 ) -> PageQuad:
-    """Выбрать четырёхугольник страницы. `staves` — результат `staff.analyse`."""
-    candidate = _from_staves(gray, staves, config)
+    """Выбрать четырёхугольник страницы. `staves` и `lines` — результат `staff.analyse`."""
+    candidate = _from_staves(gray, staves, config, lines or [])
     if candidate is not None:
         return candidate
     candidate = _from_contour(gray, config)
@@ -70,7 +71,10 @@ def detect_page(
 # ----------------------------------------------------------------------------------
 
 def _from_staves(
-    gray: np.ndarray, staves: list[staff.Staff], config: PipelineConfig
+    gray: np.ndarray,
+    staves: list[staff.Staff],
+    config: PipelineConfig,
+    all_lines: list[staff.StaffLine],
 ) -> PageQuad | None:
     if len(staves) < config.min_staves_for_quad:
         return None
@@ -84,14 +88,17 @@ def _from_staves(
     # усреднение здесь систематически срезает музыку.
     left = geometry.fit_edge_line(np.array([line.left for line in lines]), centre)
     right = geometry.fit_edge_line(np.array([line.right for line in lines]), centre)
-    # Верх и низ — по самим крайним линейкам: это цельные ломаные через всю
-    # страницу, тут достаточно устойчивой регрессии.
-    top = geometry.fit_line_robust(np.stack([staves[0].top.xs, staves[0].top.ys], axis=1))
-    bottom = geometry.fit_line_robust(
-        np.stack([staves[-1].bottom.xs, staves[-1].bottom.ys], axis=1)
-    )
-
     block_width = float(np.median([line.length for line in lines]))
+    # Верх и низ — по самим крайним линейкам: это цельные ломаные через всю
+    # страницу, тут достаточно устойчивой регрессии. Крайней считаем и линейку,
+    # которая в стан НЕ собралась (см. `stray_extent`): рамка по станам иначе
+    # отрезает целую систему.
+    upper, lower = stray_extent(staves, all_lines, block_width)
+    first = upper if upper is not None else staves[0].top
+    last = lower if lower is not None else staves[-1].bottom
+    top = geometry.fit_line_robust(np.stack([first.xs, first.ys], axis=1))
+    bottom = geometry.fit_line_robust(np.stack([last.xs, last.ys], axis=1))
+
     block_height = abs(staves[-1].bottom.y_mid - staves[0].top.y_mid) or block_width
     interline = float(np.median([s.interline for s in staves]))
 
@@ -146,6 +153,51 @@ def _from_staves(
         {"staves": len(staves), "interline": round(interline, 2),
          "разброс_концов": round(residual, 2)},
     )
+
+
+def stray_extent(
+    staves: list[staff.Staff], lines: list[staff.StaffLine], block_width: float
+) -> tuple[staff.StaffLine | None, staff.StaffLine | None]:
+    """Крайние длинные линейки выше первого и ниже последнего стана, не собравшиеся в стан.
+
+    Найдено на фото листа под углом (эталон «Ученик чародея», фагот): у нижнего
+    стана перспектива развела интервал, соседние линейки срослись в обрывки, и
+    цепочка из пяти не собралась — промежутки вышли 13.5 px при интервале 9. Сами
+    линейки при этом найдены, через всю ширину. Рамка шла по последнему
+    СОБРАННОМУ стану и отрезала систему целиком: 9 тактов из 71, а страховка
+    («станов стало меньше») молчала — на входе их тоже нашлось пять.
+
+    Строить по таким линейкам рамку нельзя, а вот не отрезать их — можно и
+    нужно. Берём только то, что похоже на линейку стана: длиной с блок нот,
+    толщиной как у линеек (край листа и его тень — втрое толще) и не дальше
+    одного шага между станами от крайнего стана. Ошибка тут безвредна: рамка
+    станет выше на одну систему, а не срежет музыку.
+    """
+    if len(staves) < 2 or not lines:
+        return None, None
+    used = {id(line) for s in staves for line in s.lines}
+    thickness = float(np.median([line.thickness for s in staves for line in s.lines]))
+    interline = float(np.median([s.interline for s in staves]))
+    spacing = float(np.median(np.diff([s.top.y_mid for s in staves])))
+    reach = 1.1 * spacing
+    first_top, last_bottom = staves[0].top.y_mid, staves[-1].bottom.y_mid
+
+    upper = lower = None
+    for line in lines:
+        if (
+            id(line) in used
+            or line.length < 0.6 * block_width
+            or line.thickness > 2.5 * thickness
+        ):
+            continue
+        y = line.y_mid
+        if last_bottom + interline < y <= last_bottom + reach:
+            if lower is None or y > lower.y_mid:
+                lower = line
+        elif first_top - reach <= y < first_top - interline:
+            if upper is None or y < upper.y_mid:
+                upper = line
+    return upper, lower
 
 
 def _outer_spread(line: np.ndarray, points: np.ndarray) -> float:

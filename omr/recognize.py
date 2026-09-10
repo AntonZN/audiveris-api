@@ -9,10 +9,12 @@
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from omr.config import DEFAULT, PipelineConfig
 from omr.debug import DebugWriter
@@ -37,6 +39,8 @@ class PageResult:
     engine_seconds: float = 0.0
     # Что движок прочитал OCR-ом над верхним станом: там метрономная отметка.
     ocr_texts: list[str] = field(default_factory=list)
+    # Заметка о повторе движка, если он терял стан (см. _retry_lost_staves).
+    engine_note: str = ""
     skipped: str = ""
     error: str = ""
 
@@ -80,6 +84,7 @@ class RecognizeResult:
             else:
                 lines.append(
                     f"  стр.{page.number}{where}: ок, движок {page.engine_seconds:.0f}s"
+                    + (f"; {page.engine_note}" if page.engine_note else "")
                 )
         if self.merge_report and self.merge_report.pages > 1:
             report = self.merge_report
@@ -230,6 +235,85 @@ def _split_spread(
     return result
 
 
+def _pad(image: np.ndarray, share: float) -> np.ndarray:
+    """Белые поля вокруг кадра: всего `share` от размера, поровну с каждой стороны."""
+    height, width = image.shape[:2]
+    dy, dx = int(height * share / 2), int(width * share / 2)
+    return cv2.copyMakeBorder(image, dy, dy, dx, dx, cv2.BORDER_CONSTANT,
+                              value=(255, 255, 255))
+
+
+# Чем повторять, если homr потерял стан. Оба варианта меняют пиксели, а не
+# музыку. Размытие — первым: геометрия и масштаб остаются ровно прежними. Поля
+# ужимают страницу в 1920 px homr на 10%. Замер на скриншоте Шопена op.10 №3
+# (homr: 9 станов из 10): размытие 0.7 и поля 110%/125% вернули десятый стан
+# (79.6% -> 91%); перемасштабирование в 2200 px — нет.
+_RETRY_VARIANTS = {
+    "blur": lambda image: cv2.GaussianBlur(image, (0, 0), 0.7),
+    "pad": lambda image: _pad(image, 0.10),
+}
+
+
+def _retry_lost_staves(
+    first: homr_engine.EngineResult,
+    image: np.ndarray | Path,
+    expected: int,
+    output_dir: Path,
+    config: PipelineConfig,
+    *,
+    timeout: int,
+    stem: str,
+) -> tuple[homr_engine.EngineResult, str]:
+    """Повторить движок, если он нашёл станов меньше, чем наш детектор.
+
+    Потерянный стан — это потерянная рука целой системы, и снаружи этого не
+    видно: партитура валидна, просто в ней нет части музыки. Сбой сидит в
+    сегментации homr и воспроизводится на тех же пикселях, поэтому повторять
+    имеет смысл только на изменённой картинке (см. `_RETRY_VARIANTS`).
+
+    Берём вариант, где станов больше; при равенстве остаётся первый заход.
+    Результат лежит под обычным именем страницы, лишние MusicXML удаляются —
+    выход раздаётся клиенту, и чужой вариант там был бы подсунутым файлом.
+    Возвращает (итог, заметка для отчёта; пусто — повтора не было).
+    """
+    if first.staffs is None or not expected or first.staffs >= expected:
+        return first, ""
+    picture = load_stage.load_bgr(image) if isinstance(image, Path) else image
+    best, seconds, tried = first, first.seconds, []
+    for name in config.engine_retry_variants:
+        try:
+            outcome = homr_engine.run(
+                _RETRY_VARIANTS[name](picture), output_dir,
+                timeout=timeout, stem=f"{stem}.retry-{name}",
+            )
+        except homr_engine.EngineError:
+            tried.append(f"{name}: без MusicXML")
+            continue
+        seconds += outcome.seconds
+        tried.append(f"{name}: {outcome.staffs}")
+        if outcome.staffs is not None and outcome.staffs > (best.staffs or 0):
+            if best is not first:
+                best.musicxml.unlink(missing_ok=True)
+            best = outcome
+        else:
+            outcome.musicxml.unlink(missing_ok=True)
+        if (best.staffs or 0) >= expected:
+            break
+
+    note = (f"homr нашёл станов {first.staffs} из {expected}, повтор: "
+            + ", ".join(tried))
+    if best is first:
+        return homr_engine.EngineResult(
+            first.musicxml, first.log, seconds, first.ocr_texts, first.staffs
+        ), note + " — оставлен первый заход"
+    shutil.move(str(best.musicxml), first.musicxml)
+    with first.log.open("a", encoding="utf-8") as handle:
+        handle.write(f"\n{note}; взят повтор, его лог — {best.log.name}\n")
+    return homr_engine.EngineResult(
+        first.musicxml, first.log, seconds, first.ocr_texts or best.ocr_texts, best.staffs
+    ), note + " — взят повтор"
+
+
 def _recognize_page(
     number: int,
     image_path: Path,
@@ -264,14 +348,18 @@ def _recognize_page(
         page.skipped = "нотных станов не найдено"
         return page
 
+    engine_input = image_path if skip_prepare else page.prepare.image
     try:
-        outcome = homr_engine.run(
-            image_path if skip_prepare else page.prepare.image,
-            output_dir, timeout=timeout, stem=stem,
-        )
+        outcome = homr_engine.run(engine_input, output_dir, timeout=timeout, stem=stem)
     except homr_engine.EngineError as exc:
         page.error = str(exc).split("\n")[0]
         return page
+
+    # Наш детектор видел на ЭТОЙ ЖЕ картинке больше станов — homr какой-то потерял.
+    expected = page.prepare.staves_as_shot if skip_prepare else page.prepare.staves_after
+    outcome, page.engine_note = _retry_lost_staves(
+        outcome, engine_input, expected, output_dir, config, timeout=timeout, stem=stem,
+    )
 
     page.musicxml = outcome.musicxml
     page.engine_seconds = outcome.seconds

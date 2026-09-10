@@ -238,6 +238,37 @@ class OmrPipelineTest(unittest.TestCase):
         self.assertAlmostEqual(line.y_at(5.0), 2.5, places=5)
         self.assertAlmostEqual(line.y_at(-100.0), 0.0, places=5)  # зажим на концах
 
+    def test_page_frame_keeps_lines_that_did_not_form_a_staff(self) -> None:
+        """Рамка страницы не должна отрезать систему, стан которой не собрался.
+
+        Боевой случай — фото листа под углом: у нижнего стана перспектива
+        развела интервал, пять линеек не собрались в цепочку, и рамка по
+        последнему СОБРАННОМУ стану отрезала 9 тактов из 71. Толстый край листа
+        при этом за линейку приниматься не должен.
+        """
+        from omr.stages import page as page_stage
+
+        def line(y: float, thickness: float = 1.5, x0: float = 0.0) -> staff.StaffLine:
+            xs = np.linspace(x0, 1000, 40)
+            return staff.StaffLine(xs, np.full_like(xs, float(y)), thickness=thickness)
+
+        staves = [staff.Staff([line(top + i * 9) for i in range(5)]) for top in (100, 270, 440)]
+        stray = [line(620), line(633), line(647), line(656)]     # несобравшийся стан
+        edge = line(760, thickness=7.0)                           # тень края листа
+        title = line(20, thickness=7.0)
+        lines = [l for s in staves for l in s.lines] + stray + [edge, title]
+
+        upper, lower = page_stage.stray_extent(staves, lines, block_width=1000.0)
+        self.assertIsNone(upper)
+        self.assertIs(lower, stray[-1])
+
+        # Короткие обрывки (балка, лига) рамку не раздвигают.
+        beams = [line(640, x0=700)]
+        self.assertEqual(
+            page_stage.stray_extent(staves, [l for s in staves for l in s.lines] + beams, 1000.0),
+            (None, None),
+        )
+
 
     # ----------------------------------------------------------------------------------
     # Пайплайн целиком
@@ -510,6 +541,70 @@ class EngineRetryTest(unittest.TestCase):
         self.assertEqual(engine.call_count, 2)
 
 
+@unittest.skipIf(cv2 is None, "нужен opencv-python-headless")
+class LostStaffRetryTest(unittest.TestCase):
+    """Повтор движка, когда homr нашёл станов меньше, чем наш детектор.
+
+    Боевой случай — скриншот Шопена op.10 №3: homr увидел 9 станов из 10, одна
+    рука системы пропала (91% -> 80%). На тех же пикселях сбой повторяется, на
+    слегка размытых — нет.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.out = Path(self._tmp.name)
+        self.page = self.out / "page.png"
+        cv2.imwrite(str(self.page), make_page(staves=6))
+
+    def _engine(self, staffs_by_attempt: dict[str, int]):
+        """Фейковый движок: число станов зависит от того, какой это заход."""
+        from omr.engines.homr_engine import EngineResult
+
+        calls: list[str] = []
+
+        def run(image, output_dir, *, timeout, stem):
+            attempt = stem.split(".retry-")[1] if ".retry-" in stem else "first"
+            calls.append(attempt)
+            musicxml = Path(output_dir) / f"{stem}.musicxml"
+            musicxml.write_text(f"<score-partwise><!-- {attempt} --></score-partwise>")
+            log = Path(output_dir) / f"{stem}.engine.log"
+            log.write_text(attempt)
+            return EngineResult(musicxml, log, 1.0, [], staffs_by_attempt[attempt])
+
+        return run, calls
+
+    def _recognize(self, staffs_by_attempt):
+        from omr.engines import homr_engine
+        from omr.recognize import recognize
+
+        run, calls = self._engine(staffs_by_attempt)
+        with unittest.mock.patch.object(homr_engine, "run", side_effect=run):
+            result = recognize(self.page, self.out, DEFAULT, timeout=5)
+        return result, calls
+
+    def test_takes_the_retry_that_found_the_lost_staff(self) -> None:
+        result, calls = self._recognize({"first": 5, "blur": 6, "pad": 6})
+        self.assertEqual(calls, ["first", "blur"])            # на первом удачном остановились
+        self.assertIn("blur", result.musicxml.read_text())    # под обычным именем — повтор
+        self.assertEqual(sorted(p.name for p in self.out.glob("*.musicxml")), ["page.musicxml"])
+        self.assertIn("взят повтор", result.pages[0].engine_note)
+
+    def test_no_retry_when_homr_saw_every_staff(self) -> None:
+        result, calls = self._recognize({"first": 6})
+        self.assertEqual(calls, ["first"])
+        self.assertEqual(result.pages[0].engine_note, "")
+
+    def test_keeps_the_first_attempt_when_retries_do_not_help(self) -> None:
+        """Ложная тревога (наш детектор насчитал лишний стан): повторы стоят
+        времени, но результат остаётся прежним, а их файлы не остаются в выходе."""
+        result, calls = self._recognize({"first": 5, "blur": 5, "pad": 4})
+        self.assertEqual(calls, ["first", "blur", "pad"])
+        self.assertIn("first", result.musicxml.read_text())
+        self.assertEqual(sorted(p.name for p in self.out.glob("*.musicxml")), ["page.musicxml"])
+        self.assertIn("оставлен первый заход", result.pages[0].engine_note)
+
+
 class MergeTest(unittest.TestCase):
     """Склейка постраничных MusicXML. Главная опасность — разное число партий."""
 
@@ -717,6 +812,62 @@ class PageNamingTest(unittest.TestCase):
         page = PageResult(number=1, source=Path("x.png"))
         page.musicxml = Path("/nonexistent/x.musicxml")
         _discard([page])   # не должно бросить
+
+
+@unittest.skipIf(cv2 is None, "нужен opencv-python-headless")
+class HomrEngineExitTest(unittest.TestCase):
+    """Падение homr ПОСЛЕ записи результата — не провал распознавания.
+
+    Под нагрузкой onnxruntime абортится на выходе из процесса (`recursive_mutex
+    lock failed`, код -6), когда MusicXML уже записан. Выбрасывать готовую
+    страницу из-за этого нельзя; а вот падение ДО записи — по-прежнему провал.
+    """
+
+    @staticmethod
+    def _fake_homr(returncode: int, stderr: str, write: bool):
+        import subprocess
+
+        def run(command, timeout):
+            if write:
+                Path(command[2]).with_suffix(".musicxml").write_text("<score-partwise/>")
+            return subprocess.CompletedProcess(command, returncode, "", stderr)
+
+        return run
+
+    def _run(self, fake):
+        from omr.engines import homr_engine
+
+        page = np.full((40, 40, 3), 255, np.uint8)
+        with tempfile.TemporaryDirectory() as tmp, \
+                unittest.mock.patch.object(homr_engine, "_run", side_effect=fake):
+            result = homr_engine.run(page, Path(tmp), stem="p")
+            return result, result.log.read_text()
+
+    def test_accepts_the_result_when_homr_dies_after_writing_it(self) -> None:
+        result, log = self._run(self._fake_homr(
+            -6, "Result was written to p.musicxml\nlibc++abi: terminating", write=True))
+        self.assertEqual(result.musicxml.name, "p.musicxml")
+        self.assertIn("результат принят", log)
+
+    def test_crash_before_writing_is_still_a_failure(self) -> None:
+        from omr.engines import homr_engine
+
+        with self.assertRaises(homr_engine.EngineError):
+            self._run(self._fake_homr(-6, "libc++abi: terminating", write=False))
+
+    def test_reports_how_many_staves_homr_kept(self) -> None:
+        """Найденные минус дубликаты — так у Брамса: 13 найдено, 1 дубль, станов 12."""
+        result, _ = self._run(self._fake_homr(
+            0, "Found 1285 staff line fragments\nFound 13 staffs\nRemoved 1 duplicate staffs\n"
+               "Found 4 connected staffs\nResult was written to p.musicxml", write=True))
+        self.assertEqual(result.staffs, 12)
+
+    def test_file_without_homr_confirmation_is_not_trusted(self) -> None:
+        """Файл есть, но homr не сказал, что дописал его, — мог оборваться посередине."""
+        from omr.engines import homr_engine
+
+        with self.assertRaises(homr_engine.EngineError):
+            self._run(self._fake_homr(-11, "Segmentation fault", write=True))
 
 
 if __name__ == "__main__":

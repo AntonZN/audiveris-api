@@ -11,7 +11,13 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from api.analysis import _reduced_copy, _sanitize_clefs, _sanitize_divisions, salvage
+from api.analysis import (
+    _declare_staves,
+    _reduced_copy,
+    _sanitize_clefs,
+    _sanitize_divisions,
+    salvage,
+)
 from api.verovio_check import renders_ok
 
 
@@ -124,6 +130,57 @@ class SanitizeClefsTest(unittest.TestCase):
         root = ET.fromstring(score_xml(part_xml("P1", [("4", 4)])))
         _sanitize_clefs(root)
         self.assertEqual([(line.text or "") for line in root.iter("line")], ["2"])
+
+
+class DeclareStavesTest(unittest.TestCase):
+    """homr пишет у нот `<staff>2</staff>`, но не объявляет `<staves>2</staves>`.
+
+    Без объявления verovio падал на загрузке, а music21 в `repair` сливал руки
+    фортепиано в один стан — клиенту уходил файл без гранд-стана.
+    """
+
+    GRAND_STAFF = (
+        '<score-partwise><part-list><score-part id="P1"><part-name/></score-part>'
+        '</part-list><part id="P1"><measure number="1">'
+        "<attributes><divisions>1</divisions><key><fifths>0</fifths></key>"
+        "<time><beats>4</beats><beat-type>4</beat-type></time>"
+        '<clef number="1"><sign>G</sign><line>2</line></clef>'
+        '<clef number="2"><sign>F</sign><line>4</line></clef></attributes>'
+        "<note><pitch><step>E</step><octave>5</octave></pitch><duration>4</duration>"
+        "<voice>1</voice><type>whole</type><staff>1</staff></note>"
+        "<backup><duration>4</duration></backup>"
+        "<note><pitch><step>C</step><octave>3</octave></pitch><duration>4</duration>"
+        "<voice>5</voice><type>whole</type><staff>2</staff></note>"
+        "</measure></part></score-partwise>"
+    )
+
+    def test_declares_the_second_staff_in_schema_order(self) -> None:
+        root = ET.fromstring(self.GRAND_STAFF)
+        _declare_staves(root)
+        attributes = root.find(".//attributes")
+        self.assertEqual(attributes.findtext("staves"), "2")
+        order = [child.tag for child in attributes]
+        self.assertLess(order.index("time"), order.index("staves"))
+        self.assertLess(order.index("staves"), order.index("clef"))
+
+    def test_music21_keeps_both_hands_after_the_fix(self) -> None:
+        """Ровно то, что делает `repair`: без объявления станов музыка сливается."""
+        from music21 import converter
+
+        root = ET.fromstring(self.GRAND_STAFF)
+        _declare_staves(root)
+        score = converter.parseData(ET.tostring(root, encoding="unicode"), format="musicxml")
+        self.assertEqual(len(score.parts), 2)   # music21 раскладывает гранд-стан на два PartStaff
+
+    def test_single_staff_and_already_declared_parts_are_left_alone(self) -> None:
+        single = ET.fromstring(score_xml(part_xml("P1", [("1", 1)])))
+        _declare_staves(single)
+        self.assertIsNone(single.find(".//staves"))
+
+        declared = ET.fromstring(self.GRAND_STAFF.replace(
+            "<clef number=\"1\">", "<staves>2</staves><clef number=\"1\">"))
+        _declare_staves(declared)
+        self.assertEqual(len(declared.findall(".//staves")), 1)
 
 
 class SalvageTest(unittest.TestCase):

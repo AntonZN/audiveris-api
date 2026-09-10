@@ -134,7 +134,7 @@ def prepare(
         debug.lines("analysis_oriented", analysis, lines, staves)
 
     # --- [2] Страница + гомография ------------------------------------------------
-    quad = page_stage.detect_page(analysis, staves, config)
+    quad = page_stage.detect_page(analysis, staves, config, lines)
     debug.quad("page_quad", analysis, quad.quad, f"{quad.source} conf={quad.confidence:.2f}")
     if quad.is_identity:
         reports.append(StageReport("page", False, "страница не выделена — кадр целиком"))

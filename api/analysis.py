@@ -596,13 +596,63 @@ def _sanitize_clefs(root) -> None:
             line_el.text = str(new)
 
 
+def _declare_staves(root) -> None:
+    """Объявить `<staves>N</staves>` у партии, ноты которой стоят на станах 1..N.
+
+    homr (0.6.2) пишет гранд-стан так: у каждой ноты `<staff>1|2</staff>`, у ключа
+    `<clef number="2">`, — но сам `<staves>2</staves>` в `<attributes>` не
+    объявляет НИКОГДА. По схеме партия без него одностанная, и дальше это
+    стреляет дважды (замерено на эталонах `tests/images`):
+
+    * verovio на таком файле падает прямо на загрузке (Брамс, соч. 99; Шуберт,
+      D783) — и срабатывает `repair`;
+    * music21 в `repair` честно читает партию как одностанную и сливает руки в
+      один стан: левая рука фортепиано уезжает в скрипичный ключ. Клиенту
+      уходил `_fixed`-файл, где от гранд-стана не оставалось ничего (точность
+      по фортепиано у Брамса 98.7% -> 16.8%) — ровно жалоба «не работают
+      гранд-стан и басовый ключ».
+
+    Объявляем по факту: максимум номеров станов у нот и ключей партии.
+    Уже объявленное не трогаем.
+    """
+    for part in root.iter("part"):
+        used = 1
+        for tag in ("note", "forward"):
+            for element in part.iter(tag):
+                text = (element.findtext("staff") or "").strip()
+                if text.isdigit():
+                    used = max(used, int(text))
+        for clef in part.iter("clef"):
+            number = (clef.get("number") or "").strip()
+            if number.isdigit():
+                used = max(used, int(number))
+        if used < 2 or part.find(".//attributes/staves") is not None:
+            continue
+        measure = part.find("measure")
+        if measure is None:
+            continue
+        attributes = measure.find("attributes")
+        if attributes is None:
+            attributes = ET.Element("attributes")
+            measure.insert(0, attributes)
+        # Порядок внутри <attributes> задан схемой: divisions, key, time, staves, …
+        position = 0
+        for index, child in enumerate(list(attributes)):
+            if child.tag in ("divisions", "key", "time"):
+                position = index + 1
+        staves = ET.Element("staves")
+        staves.text = str(used)
+        attributes.insert(position, staves)
+
+
 def _scrub_root(root) -> None:
     """In-place: пройтись по дереву MusicXML, убрать текстовые теги и починить
-    структурные дефекты (deviding, clefs), на которых music21 валится при парсе.
+    структурные дефекты (divisions, clefs, staves), на которых music21/verovio
+    валятся или портят партитуру.
 
     Удаляет целиком всё из _XML_DROP_TAGS, обнуляет содержимое _XML_BLANK_TAGS,
-    плюс зовёт защитные правки (см. _sanitize_divisions / _sanitize_clefs).
-    Не валится, если структура неожиданная — просто логирует.
+    плюс зовёт защитные правки (см. _sanitize_divisions / _sanitize_clefs /
+    _declare_staves). Не валится, если структура неожиданная — просто логирует.
     """
     try:
         for parent in list(root.iter()):
@@ -615,6 +665,7 @@ def _scrub_root(root) -> None:
                         child.remove(sub)
         _sanitize_divisions(root)
         _sanitize_clefs(root)
+        _declare_staves(root)
     except Exception:
         logger.exception("xml strip: scrub failed")
 

@@ -13,6 +13,7 @@ PNG/JPG и кладёт рядом `.musicxml`. Захотим поменять 
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -39,6 +40,9 @@ class EngineResult:
     # Тут лежит метрономная отметка — «♩=95», «= 117 "Water"», — которую сам homr
     # в MusicXML не пишет: он её либо отбрасывает, либо чистит до неузнаваемости.
     ocr_texts: list[str] = field(default_factory=list)
+    # Сколько станов homr нашёл на картинке (None — не смогли прочитать из лога).
+    # Сверяется с нашим детектором: меньше — значит, homr стан потерял.
+    staffs: int | None = None
 
 
 def interpreter() -> str:
@@ -90,7 +94,17 @@ def run(
     )
 
     produced = source.with_suffix(".musicxml")
-    if completed.returncode != 0 or not produced.exists():
+    # Падение ПОСЛЕ записи результата — не провал распознавания. Под нагрузкой
+    # onnxruntime иногда абортится уже на выходе из процесса (`libc++abi …
+    # recursive_mutex lock failed`, код -6): MusicXML записан целиком, homr успел
+    # сказать «Result was written», а мы выбрасывали готовую страницу (Брамс,
+    # соч. 99, стр. 4: минус 12 тактов при параллельных прогонах).
+    written = "Result was written to" in (completed.stdout or "") + (completed.stderr or "")
+    if completed.returncode != 0 and produced.exists() and written:
+        with log.open("a") as handle:
+            handle.write(f"\nвнимание: homr упал ПОСЛЕ записи результата (код "
+                         f"{completed.returncode}) — результат принят\n")
+    elif completed.returncode != 0 or not produced.exists():
         # Таймаут называем таймаутом: это про ресурсы и размер файла, а не про
         # распознавание, и в статистике провалов он должен стоять отдельно.
         if "TIMEOUT after" in (completed.stderr or ""):
@@ -100,7 +114,20 @@ def run(
     result = output_dir / f"{stem}.musicxml"
     shutil.move(str(produced), result)
     shutil.rmtree(work, ignore_errors=True)
-    return EngineResult(result, log, elapsed, ocr_texts)
+    return EngineResult(result, log, elapsed, ocr_texts, _staff_count(completed.stderr or ""))
+
+
+def _staff_count(stderr: str) -> int | None:
+    """Число станов, с которыми homr работал дальше: найденные минус дубликаты.
+
+    homr пишет «Found N staffs», а если часть оказалась дублями — следом
+    «Removed K duplicate staffs» (у Брамса: 13 найдено, 1 дубль, станов 12).
+    """
+    found = re.findall(r"Found (\d+) staffs", stderr)
+    if not found:
+        return None
+    removed = sum(int(value) for value in re.findall(r"Removed (\d+) duplicate staffs", stderr))
+    return int(found[-1]) - removed
 
 
 def _read_ocr_sidecar(path: Path) -> list[str]:
