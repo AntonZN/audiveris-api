@@ -135,6 +135,16 @@ class BracePairingTest(unittest.TestCase):
         tall = [_element(106, 680, 1060, 9), _element(106, 1100, 1650, 9)]
         self.assertEqual(runner._brace_decision(_System(staffs), tall, staffs), set())
 
+    def test_brace_merged_with_system_line_is_not_a_bracket(self) -> None:
+        """Lieder, превью 600 px: акколада фортепиано слилась с чертой системы в
+        один толстый блок на «голос + фортепиано». Это не скобка ансамбля —
+        иначе фортепиано разлетается на две партии. Решать нечем: пусть работает
+        прежнее правило 0.6.2 (голос один, фортепиано парой)."""
+        voice, upper, lower = _Staff(739, 805, unit=15), _Staff(887, 953, unit=15), _Staff(1038, 1102, unit=15)
+        page = [voice, upper, lower]
+        blob = _element(102, 735, 1110, 31)
+        self.assertIsNone(runner._brace_decision(_System(page), [blob], page))
+
     def test_no_evidence_returns_none(self) -> None:
         """Нет ни акколады, ни скобки — решать нечем, остаётся поведение 0.6.2."""
         staffs = [_Staff(100, 160), _Staff(300, 360)]

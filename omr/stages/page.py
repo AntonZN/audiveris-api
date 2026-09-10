@@ -113,6 +113,11 @@ def _from_staves(
     )
     margin_x = max(config.quad_margin * block_width, 3 * interline, spread)
     margin_y = max(config.quad_margin * block_height, 4 * interline)
+    # Поле НЕ ограничиваем краем кадра, хотя за кадром музыки нет: пробовали
+    # (2026-09-10), и слегка наклонная линия края, продлённая до угла кадра,
+    # «упиралась» в край — поле обнулялось и срезало акколаду и ключи левее
+    # начала линеек (Lieder-превью: голос и фортепиано слились в одну партию).
+    # Добивка пустотой за краем стоит лишь чуть мельче страницы у движка.
     left = geometry.offset_away_from(left, centre, margin_x)
     right = geometry.offset_away_from(right, centre, margin_x)
     # Сверху втрое больше: там заголовок и обозначение темпа, которые homr читает

@@ -238,6 +238,41 @@ class OmrPipelineTest(unittest.TestCase):
         self.assertAlmostEqual(line.y_at(5.0), 2.5, places=5)
         self.assertAlmostEqual(line.y_at(-100.0), 0.0, places=5)  # зажим на концах
 
+    def test_ledger_lines_do_not_form_a_staff(self) -> None:
+        """Добавочные линейки под станом не должны собираться в «ещё один стан».
+
+        Барток, стр. 1: пять сшитых добавочных линеек дали «стан» на интервал
+        ниже настоящего и короче его — 11 станов вместо 10, и повтор движка
+        срабатывал впустую.
+        """
+        def stave(top: float, x0: float, x1: float) -> staff.Staff:
+            xs = np.linspace(x0, x1, 40)
+            return staff.Staff([staff.StaffLine(xs, np.full_like(xs, top + 12.0 * i), 1.5)
+                                for i in range(5)])
+
+        real = stave(100, 0, 1000)
+        ledger = stave(160, 400, 1000)          # на интервал ниже, 60% ширины
+        grand_lower = stave(250, 0, 1000)       # второй стан гранд-стана: далеко
+        kept = staff.drop_ledger_staves([real, ledger, grand_lower])
+        self.assertEqual(kept, [real, grand_lower])
+
+        # Короткий стан ДАЛЕКО от соседей (последняя система короче) — настоящий.
+        short_last = stave(600, 0, 600)
+        self.assertEqual(staff.drop_ledger_staves([real, short_last]), [real, short_last])
+
+        # Шопен op.38, стр. 2: «стан» во всю ширину, но в промежутке гранд-стана и
+        # с шагом в полтора раза крупнее обычного — тоже добавочные линейки.
+        def wide_step(top: float) -> staff.Staff:
+            xs = np.linspace(0, 1000, 40)
+            return staff.Staff([staff.StaffLine(xs, np.full_like(xs, top + 17.0 * i), 1.5)
+                                for i in range(5)])
+
+        upper, lower = stave(100, 0, 1000), stave(260, 0, 1000)
+        in_the_gap = wide_step(165)
+        others = [stave(500 + 150 * i, 0, 1000) for i in range(3)]
+        kept = staff.drop_ledger_staves([upper, in_the_gap, lower, *others])
+        self.assertEqual(kept, [upper, lower, *others])
+
     def test_page_frame_keeps_lines_that_did_not_form_a_staff(self) -> None:
         """Рамка страницы не должна отрезать систему, стан которой не собрался.
 
@@ -812,6 +847,54 @@ class PageNamingTest(unittest.TestCase):
         page = PageResult(number=1, source=Path("x.png"))
         page.musicxml = Path("/nonexistent/x.musicxml")
         _discard([page])   # не должно бросить
+
+
+class MultiRestTest(unittest.TestCase):
+    """Многотактовая пауза homr — пустой такт с `<multiple-rest>N`, нулевой длины.
+
+    Без развёртки пауза на 4 такта не звучит, и партия вступает раньше (Гуно:
+    70 тактов вместо 73).
+    """
+
+    HOMR_OUTPUT = (
+        '<score-partwise><part-list><score-part id="P1"><part-name/></score-part></part-list>'
+        '<part id="P1"><measure number="1">'
+        "<attributes><divisions>4</divisions></attributes>"
+        "<attributes><time><beats>3</beats><beat-type>4</beat-type></time>"
+        '<clef number="1"><sign>F</sign><line>4</line></clef>'
+        "<measure-style><multiple-rest>4</multiple-rest></measure-style></attributes>"
+        "</measure>"
+        '<measure number="2"><note><pitch><step>A</step><octave>3</octave></pitch>'
+        "<duration>12</duration><voice>1</voice><type>half</type><staff>1</staff></note></measure>"
+        "</part></score-partwise>"
+    )
+
+    def test_rest_lasts_as_many_measures_as_it_says(self) -> None:
+        from omr.engines.homr_engine import expand_multi_rests
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "page.musicxml"
+            path.write_text(self.HOMR_OUTPUT)
+            self.assertEqual(expand_multi_rests(path), 3)
+            measures = ET.parse(str(path)).getroot().find("part").findall("measure")
+
+        self.assertEqual([m.get("number") for m in measures], ["1", "2", "3", "4", "5"])
+        for measure in measures[:4]:                      # 4 такта паузы по 3/4
+            self.assertEqual(measure.findtext("note/duration"), "12")
+            self.assertIsNotNone(measure.find("note/rest"))
+        self.assertIsNotNone(measures[0].find(".//multiple-rest"))  # рисовать — одной паузой
+        self.assertEqual(measures[4].findtext("note/pitch/step"), "A")
+
+    def test_file_without_multi_rests_is_untouched(self) -> None:
+        from omr.engines.homr_engine import expand_multi_rests
+
+        plain = self.HOMR_OUTPUT.replace(
+            "<measure-style><multiple-rest>4</multiple-rest></measure-style>", "")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "page.musicxml"
+            path.write_text(plain)
+            self.assertEqual(expand_multi_rests(path), 0)
+            self.assertEqual(path.read_text(), plain)
 
 
 @unittest.skipIf(cv2 is None, "нужен opencv-python-headless")

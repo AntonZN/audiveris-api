@@ -207,7 +207,12 @@ def _brace_decision(multi, tall, page_staffs):
             first, second = sorted(inside) if len(inside) == 2 else (None, None)
             if first is not None and second == first + 1:
                 pairs.add(first)
-        elif len(covered) >= 3:
+        elif len(covered) >= 4 or (len(covered) == 3 and 0.5 * unit <= width < 0.9 * unit):
+            # Скобка группы. На ровно три стана верим только элементу скобочной
+            # толщины: на мелкой картинке (Lieder, 600 px) акколада фортепиано
+            # сливается с чертой системы в один толстый блок на «голос +
+            # фортепиано», и принять его за скобку — значит разложить фортепиано
+            # на две партии. Толстый блок на три стана — не довод ни за что.
             grouped = True
     if pairs:
         return pairs

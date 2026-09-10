@@ -603,6 +603,57 @@ def analyse(
     if interline is None:
         interline = estimate_interline(lines)
 
+    staves = drop_ledger_staves(staves)
     if staves:
         interline = float(np.median([s.interline for s in staves]))
     return lines, staves, interline
+
+
+def _extent(stave: Staff) -> float:
+    return max(l.x1 for l in stave.lines) - min(l.x0 for l in stave.lines)
+
+
+def drop_ledger_staves(staves: list[Staff]) -> list[Staff]:
+    """Убрать «станы», собранные из добавочных линеек соседнего стана.
+
+    Найдено на Бартоке (Out of Doors, стр. 1) и Шопене (op.38, стр. 2): под
+    станом идут низкие ноты на трёх-четырёх добавочных линейках подряд, склейка
+    сшивает их в длинные линии, и пять таких с шагом интервала собираются в
+    «стан» — ровно на интервал ниже настоящего и короче его (63% ширины).
+    Детектор насчитывал 11 станов вместо 10, и повтор движка («homr потерял
+    стан») срабатывал впустую.
+
+    Второй вид того же (Шопен op.38, стр. 2): «стан» во всю ширину, но в
+    промежутке между станами фортепиано, собранный из добавочных линеек и
+    октавной линии с шагом 15.3 px при 10.5-11 у всех настоящих станов страницы.
+
+    Настоящие станы так близко не стоят — даже внутри гранд-стана между ними
+    несколько интервалов, — и шаг линеек у них на странице почти одинаковый.
+    Поэтому стан ближе двух интервалов к соседу считаем добавочными линейками,
+    если он заметно короче соседа или его шаг отличается от обычного для
+    страницы больше чем на четверть (а у соседа — нет).
+    """
+    if len(staves) < 2:
+        return staves
+    usual = float(np.median([s.interline for s in staves]))
+
+    def odd_size(stave: Staff) -> bool:
+        return abs(stave.interline / usual - 1.0) > 0.25
+
+    kept = []
+    for stave in staves:
+        ledger = False
+        for other in staves:
+            if other is stave:
+                continue
+            gap = (max(stave.top.y_mid, other.top.y_mid)
+                   - min(stave.bottom.y_mid, other.bottom.y_mid))
+            if gap >= 2 * max(stave.interline, other.interline):
+                continue
+            shorter = _extent(stave) < 0.8 * _extent(other)
+            if shorter or (odd_size(stave) and not odd_size(other)):
+                ledger = True
+                break
+        if not ledger:
+            kept.append(stave)
+    return kept

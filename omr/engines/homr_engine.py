@@ -114,7 +114,78 @@ def run(
     result = output_dir / f"{stem}.musicxml"
     shutil.move(str(produced), result)
     shutil.rmtree(work, ignore_errors=True)
+    try:
+        added = expand_multi_rests(result)
+    except Exception as exc:  # noqa: BLE001 — правка необязательна, страница важнее
+        added = 0
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write(f"\nмноготактовые паузы не развёрнуты: {type(exc).__name__}: {exc}\n")
+    if added:
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write(f"\nмноготактовые паузы развёрнуты: +{added} тактов\n")
     return EngineResult(result, log, elapsed, ocr_texts, _staff_count(completed.stderr or ""))
+
+
+def expand_multi_rests(path: Path) -> int:
+    """Развернуть многотактовую паузу homr в столько тактов, сколько она длится.
+
+    homr пишет паузу на N тактов ОДНИМ пустым тактом: в нём только
+    `<measure-style><multiple-rest>N</multiple-rest>`, ни ноты, ни паузы, то есть
+    длительность такта нулевая. По MusicXML `<multiple-rest>` — указание, как
+    ОТОБРАЖАТЬ следующие N тактов, а сами такты должны быть в файле. Итог без
+    правки: пауза на 4 такта не звучит вовсе, партия вступает на 4 такта раньше
+    (Гуно, «Размышление»: 70 тактов вместо 73), а в ансамбле такая партия
+    разъезжается с остальными и склейка страниц добивает её паузами не там.
+
+    Отметку `<multiple-rest>` оставляем — рисовать это по-прежнему надо одной
+    паузой. Возвращает, сколько тактов добавлено.
+    """
+    import xml.etree.ElementTree as ET
+
+    tree = ET.parse(str(path))
+    added = 0
+    for part in tree.getroot().findall("part"):
+        divisions, beats, beat_type = 1, 4, 4
+        for measure in part.findall("measure"):
+            count = 0
+            for attributes in measure.findall("attributes"):
+                divisions = _positive(attributes.findtext("divisions"), divisions)
+                beats = _positive(attributes.findtext("time/beats"), beats)
+                beat_type = _positive(attributes.findtext("time/beat-type"), beat_type)
+                count = _positive(attributes.findtext("measure-style/multiple-rest"), count)
+            if count < 2:
+                continue
+            full = max(1, round(divisions * beats * 4 / beat_type))
+            if measure.find("note") is None:
+                measure.append(_whole_rest(full))
+            position = list(part).index(measure)
+            for offset in range(1, count):
+                filler = ET.Element("measure")
+                filler.append(_whole_rest(full))
+                part.insert(position + offset, filler)
+            added += count - 1
+        if added:
+            for number, measure in enumerate(part.findall("measure"), start=1):
+                measure.set("number", str(number))
+    if added:
+        tree.write(str(path), encoding="utf-8", xml_declaration=True)
+    return added
+
+
+def _positive(text: str | None, default: int) -> int:
+    value = (text or "").strip()
+    return int(value) if value.isdigit() and int(value) > 0 else default
+
+
+def _whole_rest(duration: int):
+    import xml.etree.ElementTree as ET
+
+    note = ET.Element("note")
+    ET.SubElement(note, "rest", {"measure": "yes"})
+    ET.SubElement(note, "duration").text = str(duration)
+    ET.SubElement(note, "voice").text = "1"
+    ET.SubElement(note, "staff").text = "1"
+    return note
 
 
 def _staff_count(stderr: str) -> int | None:
