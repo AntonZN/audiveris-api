@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import signal
+import statistics
 import subprocess
 import time
 from pathlib import Path
@@ -12,7 +13,7 @@ from PIL import Image, ImageEnhance
 
 from api.config import settings
 from api.exceptions import LowInterlineError, ProcessingError
-from api import omr_bridge
+from api import drums, omr_bridge
 from api.homr_service import homr_service, is_photo
 from api.models import FileResult, ScoreTexts
 from api.presets import Preset, get_preset_args
@@ -407,15 +408,19 @@ class AudiverisService:
              `omr_pipeline_enabled=false` (откат без выката кода), но PDF он не
              читает, так что для PDF первый путь единственный.
 
-        Audiveris из цепочки выведен: не смог homr — значит не смог. Сам движок в
-        проекте остался и будет использован в другом месте (`_run_audiveris` и
-        компания), но ни один запрос на распознавание его больше не запускает —
-        раньше он стоял тут третьей попыткой и добирал темп отдельным прогоном.
+        Audiveris из этой цепочки выведен: не смог homr — значит не смог. Раньше он
+        стоял тут третьей попыткой и добирал темп отдельным прогоном.
+
+        Исключение — пресеты ударных (`drums`, `drums_1line`): их homr не знает,
+        поэтому они идут прямо в Audiveris, минуя обе попытки (`_recognize_drums`).
 
         Постобработка (analysis/bpm/texts + renders_ok + repair + salvage) для
-        обоих путей одна и та же.
+        всех путей одна и та же.
         """
         try:
+            if drums.is_drum_preset(preset):
+                return self._recognize_drums(input_path, output_dir, preset, enhance)
+
             omr_failure: ProcessingError | None = None
             if settings.omr_pipeline_enabled and omr_bridge.is_supported(input_path):
                 result, omr_failure = self._try_omr(input_path, output_dir)
@@ -519,10 +524,15 @@ class AudiverisService:
         Audiveris compound book: пайплайн `omr/` растеризует его сам, страница за
         страницей, и склейка не знает, откуда взялась страница.
 
+        Пресеты ударных — как и в single, прямо в Audiveris (compound book).
+
         Постобработка (analysis/bpm/texts + renders_ok + repair + salvage) та же,
         что и в single.
         """
         try:
+            if drums.is_drum_preset(preset):
+                return self._recognize_drums_playlist(input_paths, output_dir, preset, enhance)
+
             if input_paths and all(self._can_recognise(p) for p in input_paths):
                 output_path, log_path = self._run_homr_playlist(input_paths, output_dir)
                 return self._build_success_result(output_path, log_path)
@@ -616,23 +626,144 @@ class AudiverisService:
     ]
 
     # ------------------------------------------------------------------------
-    # Audiveris. Из цепочки распознавания выведен (2026-09-09): темп теперь
+    # Audiveris. Из общей цепочки распознавания выведен (2026-09-09): темп теперь
     # читается из OCR, который homr и так делает, а третьей попыткой Audiveris
-    # стоял дорого и редко помогал. Код НЕ удалён намеренно — движок останется в
-    # проекте под другую задачу. Всё, что ниже, сейчас не вызывается ни одним
-    # запросом на распознавание; `preset` и `enhance` в API живут только здесь.
+    # стоял дорого и редко помогал. Зовётся только для пресетов ударных — их homr
+    # не знает (см. api/drums.py); `preset` и `enhance` действуют только здесь.
     # ------------------------------------------------------------------------
+
+    def _recognize_drums(
+            self, input_path: Path, output_dir: Path, preset: str, enhance: bool,
+    ) -> FileResult:
+        """Ударные: сразу Audiveris, без omr и homr.
+
+        Провал — честная ошибка, без отката на homr: он читает перкуссионный ключ
+        как альтовый и выдал бы «успешную» партитуру из неверных нот.
+        """
+        prepared = self._audiveris_readable(input_path, enhance)
+
+        def run(target: Path, extra: list[str], timeout: int) -> tuple[Path, Path, int | None]:
+            return self._run_audiveris(prepared, target, preset, extra, timeout)
+
+        output_path, log_path, _ = self._drum_attempts(
+            output_dir, [prepared], preset, run, self._timeout_for_single()
+        )
+        return self._build_success_result(output_path, log_path)
+
+    def _recognize_drums_playlist(
+            self, input_paths: list[Path], output_dir: Path, preset: str, enhance: bool,
+    ) -> FileResult:
+        """Плейлист ударных: одна compound-книга Audiveris из всех страниц."""
+        if not input_paths:
+            raise ProcessingError("Плейлист пуст")
+        prepared = [self._audiveris_readable(p, enhance) for p in input_paths]
+
+        def run(target: Path, extra: list[str], timeout: int) -> tuple[Path, Path, int | None]:
+            return self._run_audiveris_playlist(prepared, target, preset, extra, timeout)
+
+        output_path, log_path, _ = self._drum_attempts(
+            output_dir, prepared, preset, run, self._timeout_for_playlist(prepared)
+        )
+        return self._build_success_result(output_path, log_path)
+
+    def _drum_attempts(
+            self, output_dir: Path, pages: list[Path], preset: str, run, total_timeout: int,
+    ) -> tuple[Path, Path, int | None]:
+        """Запустить Audiveris; для однолинейного стана — лесенкой по интервалу.
+
+        Интервал однолинейного стана Audiveris мерить не из чего, его задаём сами
+        (оценка по головкам, api/drums.py). Окно у Audiveris узкое: на perc-01
+        работают 18-20, а 16-17 роняют его NPE, — поэтому при провале пробуем
+        соседние значения, каждое в своём каталоге. Все попытки делят таймаут
+        одного прогона.
+        """
+        if not drums.needs_interline(preset):
+            return run(output_dir, [], total_timeout)
+
+        estimate = self._drum_interline(pages)
+        if estimate is None:
+            raise ProcessingError(
+                "Однолинейный стан ударных: не удалось оценить интервал по головкам "
+                "нот, а без него Audiveris такой лист не разбирает"
+            )
+        values = drums.ladder(estimate, settings.min_interline)
+        if not values:
+            raise ProcessingError(
+                f"Однолинейный стан ударных: интервал {estimate}px ниже порога "
+                f"{settings.min_interline}px — снимок слишком мелкий"
+            )
+
+        started_at = time.monotonic()
+        failure: ProcessingError | None = None
+        for value in values:
+            if failure is not None and time.monotonic() - started_at >= total_timeout:
+                break
+            target = output_dir / f"interline-{value}"
+            target.mkdir(parents=True, exist_ok=True)
+            try:
+                return run(
+                    target,
+                    ["-constant", f"{drums.INTERLINE_CONSTANT}={value}"],
+                    self._remaining_timeout(started_at, total_timeout),
+                )
+            except ProcessingError as exc:
+                logger.warning("Audiveris с интервалом %spx не справился: %s", value, exc.message)
+                failure = exc
+        raise failure
+
+    def _drum_interline(self, pages: list[Path]) -> int | None:
+        """Интервал по головкам нот; у плейлиста — медиана по страницам."""
+        values: list[int] = []
+        for page in pages:
+            dpi = 0
+            if page.suffix.lower() == ".pdf":
+                dpi = self._pdf_render_dpi(page) or settings.pdf_render_dpi
+            try:
+                value = drums.estimate_interline(drums.page_gray(page, dpi))
+            except Exception:
+                logger.exception("оценка интервала упала на %s", page.name)
+                value = None
+            if value is not None:
+                values.append(value)
+        return statistics.median_low(values) if values else None
+
+    def _audiveris_readable(self, input_path: Path, enhance: bool) -> Path:
+        """Вход, который Audiveris прочитает: HEIC и WebP перекладываем в растр."""
+        if input_path.suffix.lower() in (".heic", ".heif"):
+            input_path = self._convert_heif(input_path)
+        input_path = self._prepare_input(input_path, enhance)
+        if input_path.suffix.lower() not in drums.AUDIVERIS_SUFFIXES:
+            raise ProcessingError(
+                f"Audiveris не читает формат {input_path.suffix or '(без расширения)'}: "
+                f"{input_path.name}"
+            )
+        return input_path
+
+    @staticmethod
+    def _convert_heif(input_path: Path) -> Path:
+        """HEIC/HEIF с айфона → PNG (декодер — pillow-heif, как в omr/stages/load.py)."""
+        try:
+            import pillow_heif
+
+            pillow_heif.register_heif_opener()
+            target = input_path.with_suffix(".png")
+            with Image.open(input_path) as img:
+                img.convert("RGB").save(target)
+            return target
+        except Exception as exc:
+            raise ProcessingError(
+                f"Не удалось открыть HEIC {input_path.name}: {type(exc).__name__}: {exc}"
+            ) from exc
 
     def _run_audiveris(
             self, input_path: Path, output_dir: Path, preset: str = "default",
-            enhance: bool = False,
+            extra_args: list[str] | tuple[str, ...] = (),
+            timeout_seconds: int | None = None,
     ) -> tuple[Path, Path, int | None]:
-        """Run audiveris on a single input file."""
-        input_path = self._prepare_input(input_path, enhance)
-
+        """Run audiveris on a single input file, already prepared (`_audiveris_readable`)."""
         # Build command with preset
         preset_enum = Preset(preset) if preset else Preset.default
-        preset_args = get_preset_args(preset_enum)
+        preset_args = [*get_preset_args(preset_enum), *extra_args]
 
         is_pdf = input_path.suffix.lower() == ".pdf"
         movement_args = [] if is_pdf else self._NO_MOVEMENT_SPLIT
@@ -655,7 +786,7 @@ class AudiverisService:
         return self._execute_and_process(
             cmd,
             output_dir,
-            timeout_seconds=self._timeout_for_single(),
+            timeout_seconds=timeout_seconds or self._timeout_for_single(),
         )
 
     def _execute_and_process(
@@ -706,23 +837,24 @@ class AudiverisService:
 
     def _run_audiveris_playlist(
             self, input_paths: list[Path], output_dir: Path, preset: str = "default",
-            enhance: bool = False,
+            extra_args: list[str] | tuple[str, ...] = (),
+            timeout_seconds: int | None = None,
     ) -> tuple[Path, Path, int | None]:
-        """Run audiveris with playlist.
+        """Run audiveris with playlist of already prepared inputs (`_audiveris_readable`).
 
         Step 1: Create compound book from playlist (images -> playlist.omr)
         Step 2: Transcribe and export the compound book
         """
         all_logs: list[str] = []
-        total_timeout = self._timeout_for_playlist(input_paths)
+        total_timeout = timeout_seconds or self._timeout_for_playlist(input_paths)
         started_at = time.monotonic()
 
-        # Build preset args
+        # Build preset args (дополнительные -constant — в оба шага: константа живёт
+        # в рамках одного JVM-вызова)
         preset_enum = Preset(preset) if preset else Preset.default
-        preset_args = get_preset_args(preset_enum)
+        preset_args = [*get_preset_args(preset_enum), *extra_args]
 
-        # Preprocess all input images (may convert WebP to JPG)
-        processed_paths = [self._prepare_input(p, enhance) for p in input_paths]
+        processed_paths = list(input_paths)
 
         # PDF-входы: ограничиваем DPI рендера, иначе Audiveris отбросит крупные
         # листы («Too large image») уже на шаге сборки compound-книги (там PDF и
