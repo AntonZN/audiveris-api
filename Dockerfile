@@ -46,6 +46,11 @@ RUN mkdir -p /opt \
 # eng in legacy mode"). Ship the combined legacy+LSTM eng.traineddata instead.
 COPY --from=builder /src/app/dev/tessdata/eng.traineddata /opt/tessdata/eng.traineddata
 ENV TESSDATA_PREFIX=/opt/tessdata
+# Audiveris 5.11 на Linux при старте пробует GTK ради HiDPI (WellKnowns) — в
+# образе без libgtk-3 это роняло JVM. В коде поймано, а заданный uiScale и
+# headless обходят пробу целиком. Именно AUDIVERIS_OPTS: JAVA_OPTS compose
+# перетирает значением из .env, даже пустым.
+ENV AUDIVERIS_OPTS="-Djava.awt.headless=true -Dsun.java2d.uiScale=1"
 ENV INPUT_DIR=/data/in
 ENV OUTPUT_DIR=/data/out
 ENV KEEP_ARTIFACTS=1

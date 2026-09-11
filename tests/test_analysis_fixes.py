@@ -13,9 +13,14 @@ from pathlib import Path
 
 from api.analysis import (
     _declare_staves,
+    _drop_chord_beams,
+    _percussion_snapshot,
     _reduced_copy,
+    _restore_percussion,
     _sanitize_clefs,
+    _scrub_root,
     _sanitize_divisions,
+    repair,
     salvage,
 )
 from api.verovio_check import renders_ok
@@ -130,6 +135,197 @@ class SanitizeClefsTest(unittest.TestCase):
         root = ET.fromstring(score_xml(part_xml("P1", [("4", 4)])))
         _sanitize_clefs(root)
         self.assertEqual([(line.text or "") for line in root.iter("line")], ["2"])
+
+
+def drum_measure(member_beams: bool, head_beams: bool = True) -> str:
+    """Такт ударных как у Audiveris: четыре аккорда «бочка/малый + хай-хэт» восьмыми."""
+    def note(step: str, octave: int, chord: bool, beam: str | None) -> str:
+        return (
+            "<note>" + ("<chord/>" if chord else "")
+            + f"<unpitched><display-step>{step}</display-step>"
+            f"<display-octave>{octave}</display-octave></unpitched>"
+            "<duration>1</duration><voice>1</voice><type>eighth</type><stem>up</stem>"
+            + ("<notehead>x</notehead>" if chord else "")
+            + (f'<beam number="1">{beam}</beam>' if beam else "")
+            + "</note>"
+        )
+    body = []
+    for index, (step, octave) in enumerate([("F", 4), ("C", 5), ("F", 4), ("C", 5)]):
+        state = ("begin", "continue", "continue", "end")[index]
+        body.append(note(step, octave, False, state if head_beams else None))
+        body.append(note("G", 5, True, state if member_beams else None))
+    return (
+        '<part id="P1"><measure number="1"><attributes><divisions>2</divisions>'
+        "<time><beats>2</beats><beat-type>4</beat-type></time>"
+        "<clef><sign>percussion</sign></clef></attributes>"
+        + "".join(body) + "</measure></part>"
+    )
+
+
+def beams_by_role(root) -> tuple[int, int]:
+    notes = list(root.iter("note"))
+    heads = sum(len(n.findall("beam")) for n in notes if n.find("chord") is None)
+    members = sum(len(n.findall("beam")) for n in notes if n.find("chord") is not None)
+    return heads, members
+
+
+class DropChordBeamsTest(unittest.TestCase):
+    """<beam> на ноте-члене аккорда: verovio не падает, а молча теряет ноты."""
+
+    def test_members_lose_beams_heads_keep_them(self) -> None:
+        root = ET.fromstring(score_xml(drum_measure(member_beams=True)))
+        _drop_chord_beams(root)
+        self.assertEqual(beams_by_role(root), (4, 0))
+
+    def test_member_keeps_beam_when_the_head_has_none(self) -> None:
+        """Иначе группировка восьмых пропала бы совсем."""
+        root = ET.fromstring(score_xml(drum_measure(member_beams=True, head_beams=False)))
+        _drop_chord_beams(root)
+        self.assertEqual(beams_by_role(root), (0, 4))
+
+    def test_verovio_sees_every_note_after_the_fix(self) -> None:
+        """Сквозная проверка — ровно тот эффект, ради которого правка: до неё
+        verovio выбрасывал ноты аккордов (на эталоне ударных — половину)."""
+        import re
+
+        import verovio
+
+        def seen(root) -> int:
+            toolkit = verovio.toolkit()
+            toolkit.loadData(ET.tostring(root, encoding="unicode"))
+            return len(re.findall(r"<note\b", toolkit.getMEI()))
+
+        root = ET.fromstring(score_xml(drum_measure(member_beams=True)))
+        before = seen(root)
+        _drop_chord_beams(root)
+        self.assertEqual(seen(root), 8)
+        self.assertLess(before, 8, "без правки verovio должен терять ноты — иначе тест ничего не сторожит")
+
+
+class LabelPercussionPartsTest(unittest.TestCase):
+    """Имена партий обнуляем, а MuseScore по пустому имени берёт фортепиано —
+    и играет им ударные (жалоба с прода на metal-drum)."""
+
+    def test_drum_part_is_named_drumset_and_others_stay_blank(self) -> None:
+        drums = drum_measure(member_beams=False).replace('<part id="P1">', '<part id="P2">')
+        root = ET.fromstring(score_xml(part_xml("P1", [("4", 4)]), drums))
+        _scrub_root(root)
+        names = {sp.get("id"): sp.findtext("part-name") for sp in root.iter("score-part")}
+        self.assertEqual(names, {"P1": "", "P2": "Drumset"})
+
+    def test_percussion_clef_alone_is_enough(self) -> None:
+        """Такт ударных без нот (одни паузы) — партия всё равно ударная."""
+        rests = (
+            '<part id="P1"><measure number="1"><attributes><divisions>1</divisions>'
+            "<clef><sign>percussion</sign></clef></attributes>"
+            "<note><rest/><duration>4</duration><type>whole</type></note></measure></part>"
+        )
+        root = ET.fromstring(score_xml(rests))
+        _scrub_root(root)
+        self.assertEqual([sp.findtext("part-name") for sp in root.iter("score-part")], ["Drumset"])
+
+
+# Установка как у Audiveris: бочка F4, малый C5, хай-хэт G5 крестом.
+DRUM_KIT = {
+    ("F", "4", ""): ("P1-I36", 36, "Bass_Drum_1"),
+    ("C", "5", ""): ("P1-I38", 38, "Acoustic_Snare"),
+    ("G", "5", "x"): ("P1-I42", 42, "Closed_Hi_Hat"),
+}
+
+
+def drum_kit_score() -> str:
+    definitions = "".join(
+        f'<score-instrument id="{ident}"><instrument-name>{name}</instrument-name></score-instrument>'
+        for ident, _, name in DRUM_KIT.values()
+    ) + "".join(
+        f'<midi-instrument id="{ident}"><midi-channel>10</midi-channel>'
+        f"<midi-program>1</midi-program><midi-unpitched>{key}</midi-unpitched></midi-instrument>"
+        for ident, key, _ in DRUM_KIT.values()
+    )
+
+    def note(step: str, octave: str, head: str, chord: bool) -> str:
+        ident = DRUM_KIT[(step, octave, head)][0]
+        return (
+            "<note>" + ("<chord/>" if chord else "")
+            + f"<unpitched><display-step>{step}</display-step>"
+            f"<display-octave>{octave}</display-octave></unpitched>"
+            f'<duration>1</duration><instrument id="{ident}"/><voice>1</voice>'
+            "<type>quarter</type><stem>up</stem>"
+            + (f"<notehead>{head}</notehead>" if head else "") + "</note>"
+        )
+
+    notes = "".join(
+        note(step, octave, "", False) + note("G", "5", "x", True)
+        for step, octave in [("F", "4"), ("C", "5"), ("F", "4"), ("C", "5")]
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?><score-partwise version="4.0"><part-list>'
+        f'<score-part id="P1"><part-name>Drs.</part-name>{definitions}</score-part></part-list>'
+        '<part id="P1"><measure number="1"><attributes><divisions>1</divisions>'
+        "<time><beats>4</beats><beat-type>4</beat-type></time>"
+        f"<clef><sign>percussion</sign></clef></attributes>{notes}</measure></part></score-partwise>"
+    )
+
+
+def sounds_of(root) -> list[tuple[tuple[str, str, str], int | None]]:
+    """(место, головка) каждой ноты -> MIDI-звук, который она реально получит."""
+    unpitched = {
+        mi.get("id"): int(mi.findtext("midi-unpitched"))
+        for mi in root.iter("midi-instrument") if mi.findtext("midi-unpitched")
+    }
+    result = []
+    for note in root.iter("note"):
+        if note.find("unpitched") is None:
+            continue
+        key = (note.findtext("unpitched/display-step"), note.findtext("unpitched/display-octave"),
+               (note.findtext("notehead") or "").strip())
+        instrument = note.find("instrument")
+        result.append((key, unpitched.get(instrument.get("id")) if instrument is not None else None))
+    return result
+
+
+class RepairKeepsDrumsTest(unittest.TestCase):
+    """music21 (repair) схлопывал установку в один звук — «заявлено барабаны,
+    а играет не то». Инструменты должны пережить repair."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.path = Path(self._tmp.name) / "drums.musicxml"
+        self.path.write_text(drum_kit_score(), encoding="utf-8")
+
+    def test_music21_alone_loses_the_kit(self) -> None:
+        """Иначе тест ниже ничего не сторожит."""
+        from music21 import converter
+
+        written = Path(self._tmp.name) / "plain.musicxml"
+        converter.parse(str(self.path)).write("musicxml", fp=str(written))
+        heard = {key for _, key in sounds_of(ET.parse(written).getroot())}
+        self.assertNotEqual(heard, {36, 38, 42}, "music21 перестал ломать установку — правка не нужна?")
+
+    def test_every_hit_keeps_its_own_sound_after_repair(self) -> None:
+        fixed = repair(self.path)
+        self.assertIsNotNone(fixed)
+        root = ET.parse(fixed).getroot()
+        sounds = sounds_of(root)
+        self.assertEqual(len(sounds), 8)
+        for key, sound in sounds:
+            self.assertEqual(sound, DRUM_KIT[key][1], f"{key} звучит не тем инструментом")
+        self.assertEqual([sp.findtext("part-name") for sp in root.iter("score-part")], ["Drumset"])
+
+    def test_restore_refuses_when_a_hit_has_no_known_sound(self) -> None:
+        """Нота на месте, которого в исходнике не было, — лучше отказаться
+        (repair вернёт None, сработает salvage), чем отдать установку с дырами."""
+        original = ET.fromstring(drum_kit_score())
+        snapshot = _percussion_snapshot(original)
+        broken = ET.fromstring(drum_kit_score())
+        broken.find(".//unpitched/display-step").text = "A"
+        broken.find(".//unpitched/display-octave").text = "3"
+        self.assertFalse(_restore_percussion(broken, snapshot))
+
+    def test_score_without_drums_takes_no_snapshot(self) -> None:
+        root = ET.fromstring(score_xml(part_xml("P1", [("4", 4)])))
+        self.assertEqual(_percussion_snapshot(root), {})
 
 
 class DeclareStavesTest(unittest.TestCase):

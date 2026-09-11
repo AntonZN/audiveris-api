@@ -25,11 +25,13 @@ music21 импортируется лениво внутри функций — 
 
 from __future__ import annotations
 
+import copy
 import io
 import logging
 import re
 import xml.etree.ElementTree as ET
 import zipfile
+from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -645,14 +647,70 @@ def _declare_staves(root) -> None:
         attributes.insert(position, staves)
 
 
+def _drop_chord_beams(root) -> None:
+    """Снять `<beam>` с нот-членов аккорда (с `<chord/>`), если он есть у первой ноты.
+
+    Группировку задаёт первая нота аккорда — так пишет MuseScore. Audiveris же
+    ставит `<beam>` на КАЖДУЮ ноту аккорда, и verovio на этом не падает, а молча
+    выбрасывает ноты: гейт `renders_ok` проходит, `repair` не зовётся, и клиент
+    получает партитуру с дырами. Сильнее всего бьёт по ударным, где хай-хэт почти
+    всегда аккордом с бочкой или малым: на `tests/images/drum` verovio видел
+    71 ноту из 148 и 258 из 344, после правки — все.
+
+    Если у первой ноты `<beam>` нет, у члена его не трогаем — иначе группировка
+    потеряется совсем.
+    """
+    for measure in root.iter("measure"):
+        head_beamed = False
+        dropped = 0
+        for note in measure.iter("note"):
+            beams = note.findall("beam")
+            if note.find("chord") is None:
+                head_beamed = bool(beams)
+            elif head_beamed:
+                for beam in beams:
+                    note.remove(beam)
+                    dropped += 1
+        if dropped:
+            logger.debug("measure %s: dropped %d <beam> on chord members",
+                         measure.get("number"), dropped)
+
+
+def _label_percussion_parts(root) -> None:
+    """Назвать партию ударных «Drumset» вместо пустого имени.
+
+    Имена партий мы обнуляем (_XML_BLANK_TAGS), а MuseScore выбирает инструмент
+    по имени партии: безымянную он импортирует как фортепиано и фортепиано же
+    играет, хотя ноты — ударные на канале 10 с верными midi-unpitched. Замерено
+    на прод-выходе metal-drum: без имени — grand-piano, с «Drumset» — drumset.
+    Метка фиксированная, не распознанный текст, — ничего не протекает.
+    """
+    percussion = {
+        part.get("id")
+        for part in root.iter("part")
+        if part.find(".//unpitched") is not None
+        or any((clef.findtext("sign") or "").strip() == "percussion" for clef in part.iter("clef"))
+    }
+    for score_part in root.iter("score-part"):
+        if score_part.get("id") not in percussion:
+            continue
+        name = score_part.find("part-name")
+        if name is None:
+            name = ET.Element("part-name")
+            score_part.insert(0, name)   # по схеме part-name — первый в score-part
+        name.text = "Drumset"
+
+
 def _scrub_root(root) -> None:
     """In-place: пройтись по дереву MusicXML, убрать текстовые теги и починить
-    структурные дефекты (divisions, clefs, staves), на которых music21/verovio
-    валятся или портят партитуру.
+    структурные дефекты (divisions, clefs, staves, beam на нотах аккорда), на
+    которых music21/verovio валятся или портят партитуру. Партию ударных после
+    обнуления имён называем «Drumset» (см. _label_percussion_parts).
 
     Удаляет целиком всё из _XML_DROP_TAGS, обнуляет содержимое _XML_BLANK_TAGS,
     плюс зовёт защитные правки (см. _sanitize_divisions / _sanitize_clefs /
-    _declare_staves). Не валится, если структура неожиданная — просто логирует.
+    _declare_staves / _drop_chord_beams). Не валится, если структура
+    неожиданная — просто логирует.
     """
     try:
         for parent in list(root.iter()):
@@ -666,6 +724,8 @@ def _scrub_root(root) -> None:
         _sanitize_divisions(root)
         _sanitize_clefs(root)
         _declare_staves(root)
+        _drop_chord_beams(root)
+        _label_percussion_parts(root)
     except Exception:
         logger.exception("xml strip: scrub failed")
 
@@ -802,6 +862,123 @@ def _m21_write_musicxml(score, fixed_path: Path) -> bool:
         return False
 
 
+# ----------------------------------------------------------------------------------
+# Ударные через music21
+# ----------------------------------------------------------------------------------
+#
+# music21 при записи схлопывает ударную установку: из 47 инструментов Audiveris
+# остаётся один <midi-instrument> с одним <midi-unpitched>, у нот пропадает
+# <instrument>. Все удары начинают звучать одним звуком, а MuseScore на таком
+# файле вообще зависает (замерено на прод-выходе metal-drum). Поэтому до
+# music21 снимаем слепок ударных партий, а после — возвращаем его на место.
+#
+# Сопоставляем по «месту на стане + форме головки»: ровно так Audiveris сам
+# назначает звук (drum-set.xml), так что у исходника это отображение однозначно.
+# Ноты music21 сохраняет (display-step/octave и головку), разве что делит
+# длинную на две под лигой — та же позиция, тот же звук.
+
+# Элементы <note>, которые по схеме идут ДО <instrument>.
+_NOTE_BEFORE_INSTRUMENT = frozenset(
+    {"grace", "cue", "chord", "pitch", "unpitched", "rest", "duration", "tie"}
+)
+_INSTRUMENT_DEFINITIONS = frozenset({"score-instrument", "player", "midi-device", "midi-instrument"})
+
+
+def _percussion_key(note) -> "tuple[str, str, str] | None":
+    unpitched = note.find("unpitched")
+    if unpitched is None:
+        return None
+    return (
+        (unpitched.findtext("display-step") or "").strip(),
+        (unpitched.findtext("display-octave") or "").strip(),
+        (note.findtext("notehead") or "").strip(),
+    )
+
+
+def _percussion_snapshot(root) -> dict[int, dict]:
+    """Слепок ударных партий: {номер партии: определения инструментов + отображения}.
+
+    Пусто, если ударных нет — тогда repair ведёт себя ровно как раньше.
+    """
+    score_parts = {sp.get("id"): sp for sp in root.iter("score-part")}
+    snapshot: dict[int, dict] = {}
+    for index, part in enumerate(root.findall("part")):
+        by_sound: dict[tuple, Counter] = {}
+        by_place: dict[tuple, Counter] = {}
+        for note in part.iter("note"):
+            key = _percussion_key(note)
+            instrument = note.find("instrument")
+            ident = instrument.get("id") if instrument is not None else None
+            if key is None or not ident:
+                continue
+            by_sound.setdefault(key, Counter())[ident] += 1
+            by_place.setdefault(key[:2], Counter())[ident] += 1
+        score_part = score_parts.get(part.get("id"))
+        if not by_sound or score_part is None:
+            continue
+        snapshot[index] = {
+            "definitions": [copy.deepcopy(el) for el in score_part
+                            if el.tag in _INSTRUMENT_DEFINITIONS],
+            "by_sound": {k: c.most_common(1)[0][0] for k, c in by_sound.items()},
+            "by_place": {k: c.most_common(1)[0][0] for k, c in by_place.items()},
+        }
+    return snapshot
+
+
+def _restore_percussion(root, snapshot: dict[int, dict]) -> bool:
+    """Вернуть ударным партиям их инструменты. False — вернуть целиком не вышло.
+
+    Строго: каждая нота без высоты должна получить инструмент из слепка. Нота,
+    для которой звука нет (music21 переставил её на место, которого в исходнике
+    не было), — повод отказаться, а не отдать клиенту установку с дырами.
+    """
+    score_parts = list(root.iter("score-part"))
+    parts = root.findall("part")
+    for index, drum in snapshot.items():
+        if index >= len(parts) or index >= len(score_parts):
+            return False
+        score_part, part = score_parts[index], parts[index]
+        for element in list(score_part):
+            if element.tag in _INSTRUMENT_DEFINITIONS:
+                score_part.remove(element)
+        # Определения — в конец score-part: по схеме они и идут после имён.
+        for element in drum["definitions"]:
+            score_part.append(copy.deepcopy(element))
+        known = {el.get("id") for el in drum["definitions"] if el.tag == "score-instrument"}
+        for note in part.iter("note"):
+            key = _percussion_key(note)
+            if key is None:
+                continue
+            ident = drum["by_sound"].get(key) or drum["by_place"].get(key[:2])
+            if ident not in known:
+                return False
+            for old in note.findall("instrument"):
+                note.remove(old)
+            position = 0
+            for i, child in enumerate(list(note)):
+                if child.tag in _NOTE_BEFORE_INSTRUMENT:
+                    position = i + 1
+            note.insert(position, ET.Element("instrument", id=ident))
+    return True
+
+
+def _restore_percussion_file(path: Path, snapshot: dict[int, dict]) -> bool:
+    """Вернуть слепок в записанный music21 .musicxml на месте."""
+    try:
+        tree = ET.parse(str(path))
+    except Exception:
+        logger.exception("percussion restore: failed to parse %s", path)
+        return False
+    if not _restore_percussion(tree.getroot(), snapshot):
+        return False
+    try:
+        tree.write(str(path), encoding="utf-8", xml_declaration=True)
+    except Exception:
+        logger.exception("percussion restore: failed to write %s", path)
+        return False
+    return True
+
+
 def repair(path: Path, out_dir: Path | None = None) -> Path | None:
     """Пересобрать MusicXML прогоном через music21 (parse -> strip text -> write).
 
@@ -809,8 +986,16 @@ def repair(path: Path, out_dir: Path | None = None) -> Path | None:
     которых verovio падает при сборке MIDI, и заодно вырезает текстовый шум
     (см. _strip_text). Возвращает путь к починенному .musicxml или None,
     если music21 не смог разобрать/записать файл.
+
+    Ударные: music21 схлопывает установку в один звук, поэтому инструменты
+    ударных партий снимаются до него и возвращаются после (см. «Ударные через
+    music21»). Не вышло вернуть целиком — None: вызывающий уйдёт в `salvage` по
+    исходнику, где установка цела. Партитуры без ударных это не затрагивает.
     """
     from music21 import converter
+
+    original = _read_musicxml_root(path)
+    snapshot = _percussion_snapshot(original) if original is not None else {}
 
     try:
         score = converter.parse(str(path))
@@ -825,6 +1010,13 @@ def repair(path: Path, out_dir: Path | None = None) -> Path | None:
     except Exception:
         logger.exception("strip failed before write for %s", path)
     if not _m21_write_musicxml(score, fixed_path):
+        return None
+    if snapshot and not _restore_percussion_file(fixed_path, snapshot):
+        logger.warning(
+            "repair: не удалось вернуть ударные инструменты в %s — отказываемся "
+            "от music21-версии, чтобы не отдать установку одним звуком", fixed_path,
+        )
+        fixed_path.unlink(missing_ok=True)
         return None
     _strip_text_xml(fixed_path)
     return fixed_path

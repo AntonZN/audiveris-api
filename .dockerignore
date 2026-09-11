@@ -1,5 +1,9 @@
 .idea
 .gradle
+# Локальные сборки gradle: builder-стадия собирает свою, а старый app-*.tar в
+# контексте даёт runtime-стадии два совпадения для COPY app-*.tar → сборка падает.
+app/build
+build
 data
 api/__pycache__
 api/.pytest_cache

@@ -276,7 +276,9 @@ public abstract class WellKnowns
     //--------------------//
     private static void enableHiDpiScaling ()
     {
-        if (!LINUX || System.getProperty("sun.java2d.uiScale") != null) {
+        // Headless (batch in a container): no screen to scale, and GTK may be absent.
+        if (!LINUX || System.getProperty("sun.java2d.uiScale") != null
+                || java.awt.GraphicsEnvironment.isHeadless()) {
             return;
         }
 
@@ -296,7 +298,7 @@ public abstract class WellKnowns
             if (scale > 1) {
                 System.setProperty("sun.java2d.uiScale", String.valueOf(scale));
             }
-        } catch (Exception ignored) {
+        } catch (Exception | LinkageError ignored) {
         }
     }
 
@@ -335,7 +337,9 @@ public abstract class WellKnowns
             }
 
             return maxScale;
-        } catch (Exception ex) {
+        } catch (Exception | LinkageError ex) {
+            // A missing libgtk-3 raises UnsatisfiedLinkError (an Error, not an Exception):
+            // uncaught, it kills the WellKnowns static initializer and the whole JVM.
             return 0;
         }
     }
