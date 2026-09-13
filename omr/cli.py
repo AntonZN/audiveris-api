@@ -91,6 +91,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--target-width", type=int, default=DEFAULT.target_width)
     parser.add_argument("--no-safety", action="store_true",
                         help="не откатываться, даже если геометрия ухудшила результат")
+    parser.add_argument("--no-symbols", action="store_true",
+                        help="без динамики/вилок/8va/повторов из Audiveris (только homr)")
     return parser
 
 
@@ -100,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
         analysis_width=args.analysis_width,
         target_width=args.target_width,
         safety_check=not args.no_safety,
+        symbols_from_audiveris=not args.no_symbols,
     )
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)

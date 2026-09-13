@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     # Выключение возвращает прежнее поведение: homr напрямую на файл,
     # PDF через Audiveris. Замеры — в omr/README.md и api/omr_bridge.py.
     omr_pipeline_enabled: bool = True
+    # Символы, которых homr не знает (динамика, вилки cresc/dim, 8va, педаль,
+    # повторы), — из Audiveris на тех же картинках страниц, переносом в выход homr
+    # (omr/transplant.py). Стоит ~6-7 c на страницу; нет Audiveris — шаг пропускается.
+    omr_symbols_enabled: bool = True
 
     # --- homr (фото-OMR) ---
     # Для single-задач любое одиночное ИЗОБРАЖЕНИЕ (JPEG/HEIC/PNG/WebP) идёт не

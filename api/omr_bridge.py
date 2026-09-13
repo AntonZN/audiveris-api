@@ -52,15 +52,21 @@ def run(input_path: Path, output_dir: Path) -> tuple[Path, Path | None]:
     Отчёт пайплайна пишется в лог целиком: по нему видно, какие стадии
     сработали и почему — без этого разбирать провал в проде нечем.
     """
+    import dataclasses
+    import os
+
     from omr.config import DEFAULT
     from omr.recognize import recognize
 
     output_dir.mkdir(parents=True, exist_ok=True)
     log_path = output_dir / f"{input_path.stem}.omr.log"
+    # Audiveris для символов omr ищет по OMR_AUDIVERIS_CMD — тот же, что у API.
+    os.environ.setdefault("OMR_AUDIVERIS_CMD", settings.audiveris_cmd)
+    config = dataclasses.replace(DEFAULT, symbols_from_audiveris=settings.omr_symbols_enabled)
 
     try:
         result = recognize(
-            input_path, output_dir, DEFAULT,
+            input_path, output_dir, config,
             timeout=max(settings.homr_timeout_seconds, 1),
             max_pages=settings.max_pdf_pages,
         )

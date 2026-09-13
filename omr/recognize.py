@@ -18,12 +18,14 @@ import numpy as np
 
 from omr.config import DEFAULT, PipelineConfig
 from omr.debug import DebugWriter
-from omr.engines import homr_engine
+from omr.engines import audiveris_engine, homr_engine
 from omr.merge import MergeReport, merge
+from omr.notation import normalize as normalize_notation
 from omr.pipeline import PrepareResult, prepare
 from omr.stages import load as load_stage
 from omr.stages import pdf as pdf_stage
 from omr.stages import spread as spread_stage
+from omr.transplant import transplant
 
 
 @dataclass
@@ -41,6 +43,12 @@ class PageResult:
     ocr_texts: list[str] = field(default_factory=list)
     # Заметка о повторе движка, если он терял стан (см. _retry_lost_staves).
     engine_note: str = ""
+    # Картинка, которую прочитал homr, и растр страницы PDF до подготовки (для
+    # фото его нет). Audiveris ищет символы на одной из них — см. symbols_image.
+    engine_image: Path | None = None
+    raster_image: Path | None = None
+    # Что перенесено из Audiveris (динамика, вилки, 8va, педаль, повторы).
+    symbols_note: str = ""
     skipped: str = ""
     error: str = ""
 
@@ -54,6 +62,7 @@ class RecognizeResult:
     musicxml: Path | None
     pages: list[PageResult] = field(default_factory=list)
     merge_report: MergeReport | None = None
+    notation_note: str = ""
 
     @property
     def recognised(self) -> int:
@@ -86,6 +95,8 @@ class RecognizeResult:
                     f"  стр.{page.number}{where}: ок, движок {page.engine_seconds:.0f}s"
                     + (f"; {page.engine_note}" if page.engine_note else "")
                 )
+                if page.symbols_note:
+                    lines.append(f"    {page.symbols_note}")
         if self.merge_report and self.merge_report.pages > 1:
             report = self.merge_report
             lines.append(
@@ -94,6 +105,8 @@ class RecognizeResult:
                 + (f", добито паузами {report.padded_measures}" if report.padded_measures else "")
             )
             lines += [f"    {note}" for note in report.notes]
+        if self.notation_note:
+            lines.append(f"  {self.notation_note}")
         return "\n".join(lines)
 
 
@@ -171,6 +184,10 @@ def recognize(
     for number, page in enumerate(results, start=1):
         page.number = number
 
+    if config.symbols_from_audiveris:
+        _add_audiveris_symbols(results, output_dir / f"{source.stem}.audiveris", timeout,
+                               config.symbols_image)
+
     produced = [page.musicxml for page in results if page.musicxml is not None]
     if not produced:
         # Ни одной страницы. Если движок при этом ПАДАЛ (а не просто не нашёл нот),
@@ -190,11 +207,86 @@ def recognize(
                 return retry
         return RecognizeResult(None, results)
     if len(produced) == 1:
-        return RecognizeResult(produced[0], results)
+        return RecognizeResult(produced[0], results,
+                               notation_note=_normalize(produced[0], config))
 
     merged = output_dir / f"{source.stem}.musicxml"
     report = merge(produced, merged)
-    return RecognizeResult(merged, results, report)
+    return RecognizeResult(merged, results, report, notation_note=_normalize(merged, config))
+
+
+def _normalize(musicxml: Path, config: PipelineConfig) -> str:
+    """Лиги, связки и повторы после склейки: лига через границу страницы цела."""
+    if not config.normalize_notation:
+        return ""
+    try:
+        return normalize_notation(musicxml).summary()
+    except Exception as exc:  # noqa: BLE001 — нотация необязательна, ноты важнее
+        return f"нотация: правка упала ({type(exc).__name__}: {exc})"
+
+
+def _symbols_images(page: PageResult, choice: str) -> list[Path]:
+    """Картинки страницы для Audiveris, в порядке переноса.
+
+    Разрешение меняет, что Audiveris видит, в обе стороны: на растре PDF 3069 px
+    он верно собирает «голос + гранд-стан» там, где на кадре 1920 px теряет
+    стан (Бетховен, Брамс, Debussy), а на кадре 1920 px находит больше динамики
+    (mbeach: 136 против 108). `both` берёт обе: сначала растр, потом кадр;
+    повтор той же ремарки перенос отсекает сам.
+    """
+    raster, prepared = page.raster_image, page.engine_image
+    if choice == "raster":
+        chosen = [raster or prepared]
+    elif choice == "both":
+        chosen = [raster, prepared]
+    else:
+        chosen = [prepared]
+    unique: list[Path] = []
+    for image in chosen:
+        if image is not None and image not in unique:
+            unique.append(image)
+    return unique
+
+
+def _add_audiveris_symbols(pages: list[PageResult], work_dir: Path, timeout: int,
+                           choice: str = "prepared") -> None:
+    """Динамика, вилки, 8va, педаль и повторы из Audiveris — в страницы homr.
+
+    Один запуск Audiveris на все страницы (JVM поднимается один раз), каждая
+    страница — отдельная книга: обложка без нот не роняет остальные. Нет
+    Audiveris или он не разобрал страницу — страница остаётся как есть.
+    """
+    ready = [page for page in pages if page.ok and _symbols_images(page, choice)]
+    if not ready:
+        return
+    if audiveris_engine.command() is None:
+        for page in ready:
+            page.symbols_note = "символы Audiveris: Audiveris не найден"
+        return
+    images = [image for page in ready for image in _symbols_images(page, choice)]
+    try:
+        run = audiveris_engine.run_pages(images, work_dir,
+                                         timeout=max(timeout, 60 + 30 * len(images)))
+    except Exception as exc:  # noqa: BLE001 — символы необязательны
+        for page in ready:
+            page.symbols_note = f"символы Audiveris: запуск упал ({type(exc).__name__}: {exc})"
+        return
+    for page in ready:
+        produced = [path for image in _symbols_images(page, choice)
+                    for path in run.outputs.get(image, [])]
+        if not produced:
+            page.symbols_note = "символы Audiveris: страницу не разобрал" + (
+                f" ({run.error})" if run.error else "")
+            continue
+        notes = []
+        for part_file in produced:
+            try:
+                notes.append(transplant(page.musicxml, part_file).summary())
+            except Exception as exc:  # noqa: BLE001
+                notes.append(f"символы Audiveris: перенос упал ({type(exc).__name__}: {exc})")
+            finally:
+                part_file.unlink(missing_ok=True)
+        page.symbols_note = "; ".join(notes)
 
 
 def _page_stem(source: Path, number: int, indexed: bool) -> str:
@@ -349,6 +441,11 @@ def _recognize_page(
         return page
 
     engine_input = image_path if skip_prepare else page.prepare.image
+    page.engine_image = image_path if skip_prepare else clean
+    # Растр страницы PDF (или половина разворота) — PNG, который мы сами отрисовали;
+    # у фото image_path — исходник пользователя (бывает HEIC), его не берём.
+    if image_path != source and image_path.suffix.lower() == ".png":
+        page.raster_image = image_path
     try:
         outcome = homr_engine.run(engine_input, output_dir, timeout=timeout, stem=stem)
     except homr_engine.EngineError as exc:

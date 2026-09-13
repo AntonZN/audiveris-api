@@ -432,7 +432,116 @@ def _install_tempo_capture(image_path: str) -> None:
     title_detection.is_tempo_marking = capturing
 
 
+def _install_slurs_and_ties() -> None:
+    """Вернуть в MusicXML лиги и связки, которые модель homr предсказывает.
+
+    Модель выдаёт `slurStart`/`slurStop`/`tieStart`/`tieStop` в ветке артикуляций,
+    а генератор 0.6.2 их срезает (`SymbolChord.strip_slur_ties`) и выбрасывает —
+    строка, которая вешала их обратно на ноту, закомментирована с пометкой
+    «Disabled slurs and ties until the detection is more robust». Итог: ни одной
+    лиги, и хуже того — ни одной связки, то есть залигованная нота звучит
+    повторным ударом.
+
+    Перехватываем срез: срезанное запоминаем на самом символе и дописываем в
+    `<notations>` при сборке ноты. Связка — у каждой ноты аккорда своя (так она и
+    звучит), лига — одна на аккорд: иначе аккорд из трёх нот дал бы три лиги.
+    Сырые предсказания неряшливы (начало без конца, связка на другую высоту), их
+    приводит в порядок `omr.notation` уже после движка.
+
+    Отключается `OMR_HOMR_SLURS=0`.
+    """
+    import os
+
+    if os.environ.get("OMR_HOMR_SLURS", "1") == "0":
+        return
+    from homr import music_xml_generator as generator
+
+    chord_class = getattr(generator, "SymbolChord", None)
+    if chord_class is None or not hasattr(chord_class, "strip_slur_ties") \
+            or not hasattr(generator, "build_note_or_rest"):
+        return
+    wanted = ["slurStart", "slurStop", "tieStart", "tieStop"]
+
+    def strip_slur_ties(self):
+        found, symbols, slurs_taken = set(), [], set()
+        for symbol in self.symbols:
+            stripped, result = symbol.strip_articulations(wanted)
+            found.update(stripped)
+            marks = [mark for mark in stripped if mark.startswith("tie")]
+            for mark in stripped:
+                if mark.startswith("slur") and mark not in slurs_taken:
+                    slurs_taken.add(mark)
+                    marks.append(mark)
+            result._slurs_ties = marks
+            symbols.append(result)
+        return sorted(found), chord_class(symbols, tuplet_mark=self.tuplet_mark)
+
+    original_build = generator.build_note_or_rest
+    mxl = generator.mxl
+
+    def build_note_or_rest(model_note, *args, **kwargs):
+        note = original_build(model_note, *args, **kwargs)
+        marks = getattr(model_note, "_slurs_ties", None)
+        if not marks or model_note.pitch in (".", "_"):
+            return note
+        notations = note.get_children_of_type(mxl.XMLNotations)
+        if notations:
+            target = notations[0]
+        else:
+            target = mxl.XMLNotations()
+            note.add_child(target)
+        # Порядок: сначала конец, потом начало — нота, где одна лига кончается и
+        # тут же начинается следующая, иначе закрыла бы только что открытую.
+        for mark in sorted(marks, key=lambda m: (not m.endswith("Stop"), m)):
+            kind = "stop" if mark.endswith("Stop") else "start"
+            if mark.startswith("tie"):
+                target.add_child(mxl.XMLTied(type=kind))
+            else:
+                target.add_child(mxl.XMLSlur(type=kind))
+        return note
+
+    chord_class.strip_slur_ties = strip_slur_ties
+    generator.build_note_or_rest = build_note_or_rest
+
+
+def _install_token_dump(image_path: str) -> None:
+    """Сырые токены модели по станам — в `<вход>.tokens.txt` (для разбора).
+
+    Включается `OMR_HOMR_DUMP_TOKENS=1`: в проде не нужен, а при разборе «почему
+    символа нет» отвечает на главный вопрос — модель его не увидела или его
+    потеряли дальше.
+    """
+    import os
+
+    if os.environ.get("OMR_HOMR_DUMP_TOKENS") != "1":
+        return
+    import homr.main as homr_main
+
+    original = homr_main.generate_xml
+    target = Path(image_path).with_suffix(".tokens.txt")
+
+    def generate(args, staffs, title):
+        try:
+            with target.open("w", encoding="utf-8") as handle:
+                for index, voice in enumerate(staffs):
+                    handle.write(f"### voice {index}\n")
+                    handle.write("\n".join(str(symbol) for symbol in voice) + "\n")
+        except OSError:
+            pass
+        return original(args, staffs, title)
+
+    homr_main.generate_xml = generate
+
+
 if __name__ == "__main__":
+    try:
+        _install_slurs_and_ties()
+    except Exception as exc:  # noqa: BLE001 — без лиг запуск прежний
+        print(f"slurs/ties not installed: {exc}", file=sys.stderr)
+    try:
+        _install_token_dump(sys.argv[1])
+    except Exception as exc:  # noqa: BLE001
+        print(f"token dump not installed: {exc}", file=sys.stderr)
     try:
         _install_canvas_guard()
     except Exception as exc:  # noqa: BLE001 — защита необязательна, запуск важнее

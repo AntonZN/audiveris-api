@@ -471,14 +471,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--compare", nargs=2, metavar=("OUT", "REF"),
                         help="только сверить готовый MusicXML с эталоном")
+    parser.add_argument("--no-symbols", action="store_true",
+                        help="без символов из Audiveris (только homr)")
     args = parser.parse_args(argv)
 
     if args.compare:
         print(compare(Path(args.compare[0]), Path(args.compare[1])).report())
         return 0
 
+    import dataclasses
+
     from omr.config import DEFAULT
     from omr.recognize import recognize
+
+    config = dataclasses.replace(DEFAULT, symbols_from_audiveris=not args.no_symbols)
 
     sources = collect(args.inputs)
     if not sources:
@@ -487,7 +493,7 @@ def main(argv: list[str] | None = None) -> int:
     summary = []
     for source in sources:
         started = time.monotonic()
-        result = recognize(source, Path(args.output) / source.stem, DEFAULT, timeout=args.timeout)
+        result = recognize(source, Path(args.output) / source.stem, config, timeout=args.timeout)
         seconds = time.monotonic() - started
         print(f"=== {source.name}  {seconds:.0f}s", flush=True)
         print(result.report(), flush=True)

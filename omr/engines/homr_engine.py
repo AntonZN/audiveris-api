@@ -113,6 +113,9 @@ def run(
 
     result = output_dir / f"{stem}.musicxml"
     shutil.move(str(produced), result)
+    tokens = source.with_suffix(".tokens.txt")   # только при OMR_HOMR_DUMP_TOKENS=1
+    if tokens.exists():
+        shutil.move(str(tokens), output_dir / f"{stem}.tokens.txt")
     shutil.rmtree(work, ignore_errors=True)
     try:
         added = expand_multi_rests(result)
