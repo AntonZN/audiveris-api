@@ -18,6 +18,31 @@
    удаляются, перекрывающимся лигам раздаются номера.
 3. **Forward-повтор на левую черту.** Генератор homr 0.6.2 вешает `repeatStart`
    на ПРАВУЮ черту нового такта — повтор съезжает на такт позже.
+4. **Наезды внутри голоса.** Одновременные события на двух станах генератор
+   homr выписывает и сдвигает курсор на САМУЮ КОРОТКУЮ длительность, а более
+   длинное событие продолжает звучать — и следующая нота того же стана и голоса
+   начинается раньше, чем оно кончилось. MuseScore такой файл не открывает
+   («файл повреждён», код 40 в CLI): MozaVeil с прода — такты 3 и 17. Время в
+   MusicXML задаёт курсор (`backup`/`forward`), а голос — только метка, поэтому
+   длинное событие переводится в свободный голос того же стана, ни одна нота во
+   времени не сдвигается. Пауза, уехавшая в отдельный голос, делается невидимой.
+5. **Тремоло.** Токен модели `tremolo` относится к ОДНОЙ ноте, а генератор homr
+   чередует `type="start"`/`"stop"` по всему файлу — одиночное тремоло
+   становится «двухнотным» между чужими нотами, в том числе через тактовую
+   черту. MuseScore такой файл не открывает (Гайдн, Брамс соч. 99). Пишем
+   `single`.
+6. **Партии разной длины** (jungle: 22, 20 и 20 тактов на одной странице)
+   дополняются тактами-паузами до самой длинной: партитура с разным числом
+   тактов в партиях — тоже отказ MuseScore.
+7. **Скобки триолей.** homr пишет `<tuplet type="start">` и не закрывает группу,
+   а неполную группу триолей (модель ошиблась в длительности) MuseScore без явной
+   скобки не открывает: две триольные 16-е подряд — отказ, те же ноты между
+   `start` и `stop` — принимаются (синтетика, CLI MuseScore 4.6). Скобки
+   пересобираются по голосам: подряд идущие ноты с одним `time-modification` —
+   группами полного размера, остаток последней группой. Длительности не
+   меняются. Брамса соч. 99 (2-я часть, т.8) это не спасает: там триоль
+   начинается за концом переполненного такта, и что именно MuseScore в нём не
+   нравится, по синтетике установить не удалось.
 """
 
 from __future__ import annotations
@@ -222,12 +247,265 @@ def _fix_forward_repeats(part: ET.Element, report: NotationReport) -> None:
             report.counts["forward-повтор перенесён на левую черту"] += 1
 
 
+@dataclass
+class _Event:
+    onset: float
+    end: float
+    staff: str
+    voice: str
+    order: int
+    rest: bool
+    notes: list[ET.Element] = field(default_factory=list)
+
+
+def _voice_events(measure: ET.Element) -> list[_Event]:
+    """Голова аккорда (с членами) — одно событие; форшлаги времени не занимают."""
+    events: list[_Event] = []
+    position = 0.0
+    last: _Event | None = None
+    for order, element in enumerate(measure):
+        if element.tag == "backup":
+            position -= float(element.findtext("duration") or 0)
+        elif element.tag == "forward":
+            position += float(element.findtext("duration") or 0)
+        elif element.tag == "note":
+            if element.find("grace") is not None:
+                continue
+            if element.find("chord") is not None and last is not None:
+                last.notes.append(element)
+                continue
+            duration = float(element.findtext("duration") or 0)
+            last = _Event(position, position + duration,
+                          (element.findtext("staff") or "1").strip(),
+                          (element.findtext("voice") or "1").strip(),
+                          order, element.find("rest") is not None, [element])
+            events.append(last)
+            position += duration
+    return events
+
+
+def _set_voice(note: ET.Element, voice: str) -> None:
+    element = note.find("voice")
+    if element is None:
+        element = ET.Element("voice")
+        anchor = note.find("duration")
+        children = list(note)
+        note.insert(children.index(anchor) + 1 if anchor is not None else len(children), element)
+    element.text = voice
+
+
+# MuseScore держит не больше четырёх голосов на стан, а номера голосов раскладывает
+# по станам на всю партию: homr 0.6.2 пишет на нижнем стане и `1`, и `5`, и
+# разведение наездов новыми номерами (у Dichterliebe дошло до 16) ломало файл
+# накопительно — каждый такт по отдельности принимался, первые пять вместе нет.
+_VOICES_PER_STAFF = 4
+
+
+def _fix_voice_overlaps(part: ET.Element, report: NotationReport) -> None:
+    """Разложить события каждого стана по четырём дорожкам без наездов.
+
+    Номер голоса — (стан − 1) · 4 + дорожка: у каждого стана свои 1–4 / 5–8, как
+    в новых версиях homr. Событие идёт на «свою» дорожку (по порядку появления
+    его голоса в такте). Если там мешает пауза или более длинная выдержанная нота,
+    с дороги уходит она — так мелодия остаётся в своём голосе; иначе на
+    свободную дорожку идёт само событие. Время не трогается: курсор задают
+    `backup`/`forward`, голос — только метка. Пауза, ушедшая со своей дорожки,
+    становится невидимой.
+    """
+    eps = 1e-9
+
+    def free(lane: list[_Event], event: _Event) -> bool:
+        return all(other.end <= event.onset + eps or other.onset >= event.end - eps
+                   for other in lane)
+
+    for measure in part.findall("measure"):
+        events = _voice_events(measure)
+        graces = _grace_owners(measure)
+        by_staff: dict[str, list[_Event]] = {}
+        for event in events:
+            by_staff.setdefault(event.staff, []).append(event)
+        for staff, staff_events in by_staff.items():
+            base = (int(staff) - 1) * _VOICES_PER_STAFF if staff.isdigit() else 0
+            preferred: dict[str, int] = {}
+            for event in sorted(staff_events, key=lambda e: e.order):
+                if event.voice not in preferred and len(preferred) < _VOICES_PER_STAFF:
+                    preferred[event.voice] = len(preferred) + 1
+            lanes: dict[int, list[_Event]] = {slot: [] for slot in range(1, _VOICES_PER_STAFF + 1)}
+            slot_of: dict[int, int] = {}
+            for event in sorted(staff_events, key=lambda e: (e.onset, e.order)):
+                wish = preferred.get(event.voice, 1)
+                slot = wish if free(lanes[wish], event) else None
+                if slot is None:
+                    blockers = [other for other in lanes[wish] if not free([other], event)]
+                    if len(blockers) == 1 and (blockers[0].rest or blockers[0].end > event.end + eps):
+                        blocker = blockers[0]
+                        refuge = next((s for s in lanes if s != wish
+                                       and free(lanes[s], blocker)), None)
+                        if refuge is not None:
+                            lanes[wish].remove(blocker)
+                            lanes[refuge].append(blocker)
+                            slot_of[id(blocker)] = refuge
+                            slot = wish
+                            report.counts["наездов в голосе разведено"] += 1
+                if slot is None:
+                    slot = next((s for s in lanes if s != wish and free(lanes[s], event)), None)
+                    if slot is None:
+                        slot = wish
+                        report.counts["наездов не разведено (больше 4 голосов)"] += 1
+                    else:
+                        report.counts["наездов в голосе разведено"] += 1
+                lanes[slot].append(event)
+                slot_of[id(event)] = slot
+            for event in staff_events:
+                slot = slot_of[id(event)]
+                wish = preferred.get(event.voice, 1)
+                if event.rest and slot != wish:
+                    for note in event.notes:
+                        note.set("print-object", "no")
+                label = str(base + slot)
+                for note in event.notes + graces.get(event.notes[0], []):
+                    if (note.findtext("voice") or "").strip() != label:
+                        _set_voice(note, label)
+                        report.counts["голосов перенумеровано"] += 1
+
+
+def _grace_owners(measure: ET.Element) -> dict[ET.Element, list[ET.Element]]:
+    """Форшлаги — к следующей основной ноте того же стана: голос у них общий."""
+    owners: dict[ET.Element, list[ET.Element]] = {}
+    waiting: dict[str, list[ET.Element]] = {}
+    for element in measure:
+        if element.tag != "note":
+            continue
+        staff = (element.findtext("staff") or "1").strip()
+        if element.find("grace") is not None:
+            waiting.setdefault(staff, []).append(element)
+        elif element.find("chord") is None and waiting.get(staff):
+            owners[element] = waiting.pop(staff)
+    return owners
+
+
+def _fix_tremolos(part: ET.Element, report: NotationReport) -> None:
+    for tremolo in part.iter("tremolo"):
+        if tremolo.get("type") in ("start", "stop"):
+            tremolo.set("type", "single")
+            report.counts["тремоло стало одиночным"] += 1
+
+
+def _pad_parts(root: ET.Element, report: NotationReport) -> None:
+    parts = root.findall("part")
+    if len(parts) < 2:
+        return
+    longest = max(len(part.findall("measure")) for part in parts)
+    for part in parts:
+        measures = part.findall("measure")
+        missing = longest - len(measures)
+        if missing <= 0 or not measures:
+            continue
+        divisions, beats, beat_type = 1, 4, 4
+        for attributes in part.iter("attributes"):
+            for tag, current in (("divisions", divisions), ("time/beats", beats),
+                                 ("time/beat-type", beat_type)):
+                text = (attributes.findtext(tag) or "").strip()
+                if text.isdigit() and int(text) > 0:
+                    if tag == "divisions":
+                        divisions = int(text)
+                    elif tag == "time/beats":
+                        beats = int(text)
+                    else:
+                        beat_type = int(text)
+        length = max(1, divisions * beats * 4 // beat_type)
+        number = len(measures)
+        for _ in range(missing):
+            number += 1
+            measure = ET.SubElement(part, "measure", {"number": str(number)})
+            note = ET.SubElement(measure, "note")
+            ET.SubElement(note, "rest", {"measure": "yes"})
+            ET.SubElement(note, "duration").text = str(length)
+            ET.SubElement(note, "voice").text = "1"
+        report.counts["тактов-пауз добавлено в короткие партии"] += missing
+
+
+def _fix_tuplet_brackets(part: ET.Element, report: NotationReport) -> None:
+    for measure in part.findall("measure"):
+        lanes: dict[tuple[str, str], list[_Event]] = {}
+        for event in _voice_events(measure):
+            lanes.setdefault((event.staff, event.voice), []).append(event)
+        for events in lanes.values():
+            groups: list[list[_Event]] = []
+            run: list[_Event] = []
+            ratio = None
+            for event in sorted(events, key=lambda e: (e.onset, e.order)):
+                modification = event.notes[0].find("time-modification")
+                current = None if modification is None else (
+                    modification.findtext("actual-notes"), modification.findtext("normal-notes"))
+                if current is not None and run and current == ratio \
+                        and abs(run[-1].end - event.onset) < 1e-9:
+                    run.append(event)
+                    continue
+                groups += _split_tuplet_run(run, ratio)
+                run, ratio = ([event], current) if current is not None else ([], None)
+            groups += _split_tuplet_run(run, ratio)
+            for group in groups:
+                if _set_tuplet_bracket(group):
+                    report.counts["скобок триолей пересобрано"] += 1
+
+
+def _split_tuplet_run(run: list[_Event], ratio) -> list[list[_Event]]:
+    """Ряд триольных нот -> группы полного размера (actual × самая короткая), остаток — последней."""
+    if not run or ratio is None or not (ratio[0] or "").isdigit():
+        return []
+    unit = min(event.end - event.onset for event in run)
+    size = unit * int(ratio[0])
+    groups, current, filled = [], [], 0.0
+    for event in run:
+        current.append(event)
+        filled += event.end - event.onset
+        if size > 0 and filled >= size - 1e-9:
+            groups.append(current)
+            current, filled = [], 0.0
+    if current:
+        groups.append(current)
+    return groups
+
+
+def _set_tuplet_bracket(group: list[_Event]) -> bool:
+    """Скобка start на первой ноте группы и stop на последней; остальные <tuplet> — долой."""
+    wanted = {id(group[0].notes[0]): "start", id(group[-1].notes[0]): "stop"}
+    if len(group) == 1:
+        wanted = {id(group[0].notes[0]): "start"}
+    changed = False
+    for event in group:
+        for note in event.notes:
+            for notations in note.findall("notations"):
+                for tuplet in notations.findall("tuplet"):
+                    if wanted.get(id(note)) != tuplet.get("type"):
+                        notations.remove(tuplet)
+                        changed = True
+    for note_id, kind in wanted.items():
+        note = next(n for event in group for n in event.notes if id(n) == note_id)
+        notations = _notations(note)
+        if not any(t.get("type") == kind for t in notations.findall("tuplet")):
+            ET.SubElement(notations, "tuplet", {"type": kind})
+            changed = True
+    if len(group) == 1:
+        # Одинокая триольная нота: и начало, и конец на ней же.
+        notations = _notations(group[0].notes[0])
+        if not any(t.get("type") == "stop" for t in notations.findall("tuplet")):
+            ET.SubElement(notations, "tuplet", {"type": "stop"})
+            changed = True
+    return changed
+
+
 def normalize(path: Path, output: Path | None = None, *, ties_from_slurs: bool = True,
               pairing: str = "lifo", max_measures: int | None = None,
               tie_rule: str = "equal") -> NotationReport:
     report = NotationReport()
     tree = ET.parse(str(path))
+    _pad_parts(tree.getroot(), report)
     for part in tree.getroot().findall("part"):
+        _fix_tremolos(part, report)
+        _fix_voice_overlaps(part, report)
+        _fix_tuplet_brackets(part, report)
         _fix_slurs(part, report, ties_from_slurs=ties_from_slurs, pairing=pairing,
                    max_measures=max_measures, tie_rule=tie_rule)
         _fix_forward_repeats(part, report)

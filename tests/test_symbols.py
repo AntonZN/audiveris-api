@@ -121,6 +121,118 @@ class NotationTests(Workspace):
         self.assertEqual(len(measure.findall("barline")), 1)
 
 
+class MuseScoreSafetyTests(Workspace):
+    """Правки, без которых MuseScore не открывает файл («файл повреждён», код 40).
+
+    Судья при разборе — CLI MuseScore 4.6 на выходах tests/images и MozaVeil с
+    прода; до правок отказывал 12 файлам из 24, после — одному.
+    """
+
+    def _timeline(self, root):
+        """(стан, момент, высота) всех нот — время не должно сдвинуться."""
+        result = []
+        for measure_index, measure in enumerate(root.iter("measure")):
+            position = 0
+            last = 0
+            for element in measure:
+                if element.tag == "backup":
+                    position -= int(element.findtext("duration"))
+                elif element.tag == "forward":
+                    position += int(element.findtext("duration"))
+                elif element.tag == "note":
+                    if element.find("chord") is not None:
+                        onset = last
+                    else:
+                        onset = last = position
+                        position += int(element.findtext("duration") or 0)
+                    result.append((measure_index, element.findtext("staff"), onset,
+                                   element.findtext("pitch/step"), element.findtext("pitch/octave")))
+        return sorted(result, key=str)
+
+    def test_overlap_inside_voice_moves_to_free_voice_without_moving_time(self) -> None:
+        # MozaVeil с прода, такт 17: пауза-восьмая (6-8) и 16-я E5 с доли 7 в одном
+        # голосе одного стана — так homr выписывает аккорд из длительностей разных станов.
+        rest = ('<note><rest/><duration>2</duration><voice>1</voice><type>eighth</type>'
+                '<staff>1</staff></note>')
+        body = (note("C", 5, 6) + rest + "<backup><duration>1</duration></backup>"
+                + note("E", 5, 1))
+        path = self.write("overlap.musicxml", score([body]))
+        before = self._timeline(ET.parse(path).getroot())
+        report = normalize(path)
+        root = ET.parse(path).getroot()
+        self.assertEqual(report.counts["наездов в голосе разведено"], 1)
+        self.assertEqual(self._timeline(root), before)
+        notes = root.findall(".//note")
+        voices = {(n.findtext("pitch/step") or "rest"): n.findtext("voice") for n in notes}
+        self.assertEqual(voices["C"], "1")
+        self.assertEqual(voices["E"], "1")
+        self.assertEqual(voices["rest"], "2")
+        self.assertEqual(notes[1].get("print-object"), "no")
+
+    def test_voices_are_canonical_and_capped_per_staff(self) -> None:
+        # homr 0.6.2 путает номера голосов между станами (1 и 5 на нижнем стане);
+        # номер голоса — (стан − 1) · 4 + дорожка.
+        lower = ('<note><pitch><step>C</step><octave>3</octave></pitch><duration>16</duration>'
+                 '<voice>1</voice><type>whole</type><staff>2</staff></note>')
+        body = bar(MELODY) + "<backup><duration>16</duration></backup>" + lower
+        path = self.write("voices.musicxml", score([body]))
+        normalize(path)
+        root = ET.parse(path).getroot()
+        staff2 = [n.findtext("voice") for n in root.iter("note") if n.findtext("staff") == "2"]
+        staff1 = {n.findtext("voice") for n in root.iter("note") if n.findtext("staff") == "1"}
+        self.assertEqual(staff2, ["5"])
+        self.assertEqual(staff1, {"1"})
+
+    def test_tremolo_becomes_single(self) -> None:
+        # Генератор homr чередует start/stop по всему файлу: одиночное тремоло
+        # превращалось в «двухнотное» между чужими нотами (Гайдн, Брамс соч. 99).
+        tremolo = '<notations><ornaments><tremolo type="{}">3</tremolo></ornaments></notations>'
+        body = (note("C", 5, 8, extra=tremolo.format("start"))
+                + note("D", 5, 8, extra=tremolo.format("stop")))
+        path = self.write("tremolo.musicxml", score([body]))
+        normalize(path)
+        types = [t.get("type") for t in ET.parse(path).getroot().iter("tremolo")]
+        self.assertEqual(types, ["single", "single"])
+
+    def test_tuplet_runs_get_explicit_brackets_without_changing_durations(self) -> None:
+        # homr пишет только <tuplet type="start">; неполную группу MuseScore без явной
+        # скобки не открывает (Брамс соч. 99, 2-я часть, т.8).
+        triplet = ('<note><pitch><step>{}</step><octave>5</octave></pitch><duration>{}</duration>'
+                   '<voice>1</voice><type>eighth</type><time-modification><actual-notes>3'
+                   '</actual-notes><normal-notes>2</normal-notes></time-modification>'
+                   '<staff>1</staff>{}</note>')
+        start = '<notations><tuplet type="start"/></notations>'
+        quarter = note("C", 5, 12)
+        six = "".join(triplet.format(step, 2, start if i == 0 else "")
+                      for i, step in enumerate("CDEFGA"))
+        two = triplet.format("B", 2, start) + triplet.format("C", 2, "")
+        text = score([quarter + six], [quarter + note("C", 5, 8) + two])
+        text = text.replace("<divisions>4</divisions>", "<divisions>6</divisions>")
+        path = self.write("tuplets.musicxml", text)
+        before = self._timeline(ET.parse(path).getroot())
+        normalize(path)
+        root = ET.parse(path).getroot()
+        self.assertEqual(self._timeline(root), before)
+        first, second = root.findall("part")
+        brackets = [(n.findtext("pitch/step"), t.get("type"))
+                    for n in first.iter("note") for t in n.iter("tuplet")]
+        self.assertEqual(brackets, [("C", "start"), ("E", "stop"), ("F", "start"), ("A", "stop")])
+        brackets = [(n.findtext("pitch/step"), t.get("type"))
+                    for n in second.iter("note") for t in n.iter("tuplet")]
+        self.assertEqual(brackets, [("B", "start"), ("C", "stop")])
+
+    def test_short_parts_are_padded_with_rest_measures(self) -> None:
+        # jungle: 22, 20 и 20 тактов в партиях одной страницы.
+        path = self.write("parts.musicxml", score([bar(MELODY), bar(MELODY2)], [bar(MELODY)]))
+        report = normalize(path)
+        parts = ET.parse(path).getroot().findall("part")
+        self.assertEqual([len(p.findall("measure")) for p in parts], [2, 2])
+        self.assertEqual(report.counts["тактов-пауз добавлено в короткие партии"], 1)
+        padded = parts[1].findall("measure")[1]
+        self.assertEqual(padded.find("note/rest").get("measure"), "yes")
+        self.assertEqual(padded.findtext("note/duration"), "16")
+
+
 def direction(content: str, staff: int | None = None, sound: str = "") -> str:
     staff_xml = f"<staff>{staff}</staff>" if staff else ""
     return (f'<direction placement="below"><direction-type>{content}</direction-type>'
