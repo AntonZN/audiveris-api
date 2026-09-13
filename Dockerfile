@@ -45,6 +45,11 @@ RUN mkdir -p /opt \
 # package only ships as an LSTM-only model (init fails: "Could not initialize ...
 # eng in legacy mode"). Ship the combined legacy+LSTM eng.traineddata instead.
 COPY --from=builder /src/app/dev/tessdata/eng.traineddata /opt/tessdata/eng.traineddata
+# И поверх apt-модели тоже: прод .env указывал TESSDATA_PREFIX на apt-каталог, и
+# OCR Audiveris молча умирал (нет текста -> нет метронома -> нет bpm), дважды.
+# Комбинированная модель — надмножество LSTM-only, других пользователей
+# Tesseract в образе нет (homr читает текст своим rapidocr).
+COPY --from=builder /src/app/dev/tessdata/eng.traineddata /usr/share/tesseract-ocr/5/tessdata/eng.traineddata
 ENV TESSDATA_PREFIX=/opt/tessdata
 # Audiveris 5.11 на Linux при старте пробует GTK ради HiDPI (WellKnowns) — в
 # образе без libgtk-3 это роняло JVM. В коде поймано, а заданный uiScale и
