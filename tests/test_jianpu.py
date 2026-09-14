@@ -29,7 +29,8 @@ try:
 
     from omr.engines import jianpu_engine
     from omr.engines.homr_engine import EngineError
-    from omr.jianpu import voices
+    from omr.engines.jianpu_engine import HeaderLine
+    from omr.jianpu import tempo, voices
     from omr.jianpu.recognize import JianpuResult, _readable, recognize
 except ImportError:  # pragma: no cover
     cv2 = None
@@ -99,22 +100,21 @@ class MelodyTest(unittest.TestCase):
         self.assertEqual([m.time for m in back.measures], [m.time for m in song.measures])
 
 
-# Подмена движка: пишет MusicXML на каждую картинку, кроме названной в FAKE_FAIL, —
-# про неё говорит так же, как настоящий CLI jpeditor.
+# Подмена раннера: на каждую картинку пишет MusicXML и заголовок из FAKE_HEADER,
+# кроме названной в FAKE_FAIL, — про неё говорит так же, как настоящий раннер.
 _FAKE_ENGINE = r'''
 import os, pathlib, sys
-args = sys.argv[1:]
-out = pathlib.Path(args[args.index("-o") + 1])
+omr_js, out, *images = sys.argv[1:]
+out = pathlib.Path(out)
 failed = 0
-for arg in args:
+for arg in images:
     image = pathlib.Path(arg)
-    if image.suffix != ".png":
-        continue
     if image.name == os.environ.get("FAKE_FAIL"):
         print(f"✗ {image.name}: 未找到谱行", file=sys.stderr)
         failed += 1
         continue
     (out / (image.stem + ".musicxml")).write_text(MUSICXML, encoding="utf-8")
+    (out / (image.stem + ".header.json")).write_text(os.environ.get("FAKE_HEADER", "[]"), encoding="utf-8")
 sys.exit(1 if failed else 0)
 '''
 
@@ -133,10 +133,14 @@ class EngineWrapperTest(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.dir = Path(temp.name)
-        script = self.dir / "fake-omr-cli.py"
+        script = self.dir / "fake-runner.py"
         script.write_text(f"MUSICXML = {_PAGE_XML!r}\n" + _FAKE_ENGINE, encoding="utf-8")
+        package = self.dir / "package"
+        package.mkdir()
+        (package / "omr.js").write_text("", encoding="utf-8")
         environment = mock.patch.dict(os.environ, {
-            "OMR_NODE": sys.executable, "OMR_JIANPU_CLI": str(script), "PYTHONIOENCODING": "utf-8",
+            "OMR_NODE": sys.executable, "OMR_JIANPU_RUNNER": str(script),
+            "OMR_JIANPU_PACKAGE": str(package), "PYTHONIOENCODING": "utf-8",
         })
         environment.start()
         self.addCleanup(environment.stop)
@@ -163,7 +167,7 @@ class EngineWrapperTest(unittest.TestCase):
         self.assertEqual(sorted(result.outputs), ["x.p01", "x.p02"])
 
     def test_missing_engine_is_an_engine_error(self) -> None:
-        with mock.patch.dict(os.environ, {"OMR_JIANPU_CLI": str(self.dir / "nope.mjs")}):
+        with mock.patch.dict(os.environ, {"OMR_JIANPU_PACKAGE": str(self.dir / "nope")}):
             with self.assertRaises(EngineError):
                 jianpu_engine.run_pages([(self._image("p.png"), "p")], self.dir / "out")
 
@@ -196,6 +200,14 @@ class EngineWrapperTest(unittest.TestCase):
         self.assertIsNone(result.musicxml)
         self.assertIn("многоголосие", result.refused)
         self.assertFalse((self.dir / "out" / "choir.engine.log").exists())
+
+    def test_tempo_word_from_the_header_reaches_the_score(self) -> None:
+        """Строку «中速 深情地» движок выбрасывает — темп берётся из перехваченного заголовка."""
+        header = '[{"text": "中速深情地", "height": 31, "x": 154, "y": 125}]'
+        with mock.patch.dict(os.environ, {"FAKE_HEADER": header}):
+            result = recognize([self._image("song.png")], self.dir / "out")
+        self.assertEqual(ET.parse(result.musicxml).getroot().find(".//sound").get("tempo"), "88")
+        self.assertTrue(any("оценка по слову «中速»" in note for note in result.notes))
 
 
 def _digits_row(page: np.ndarray, y: int, x: int = 160) -> None:
@@ -259,6 +271,46 @@ class VoicesTest(unittest.TestCase):
         page = _single_voice_page()
         page[200:900, :16] = 0
         self.assertFalse(voices.detect(page).multi)
+
+
+@unittest.skipIf(cv2 is None, "нужен OpenCV")
+class TempoTest(unittest.TestCase):
+    def test_textbook_scale_and_plain_words(self) -> None:
+        cases = {"中速 深情地": 88, "小快板": 108, "快板": 132, "慢速": 52, "稍快": 108, "Allegro": 132}
+        for text, bpm in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(tempo.from_header(["1=C", text]).bpm, bpm)
+
+    def test_metronome_beats_the_word_and_free_rhythm_has_no_tempo(self) -> None:
+        self.assertEqual(tempo.from_header(["中速 ♩=72"]).bpm, 72)
+        self.assertIsNone(tempo.from_header(["散板"]).bpm)
+        self.assertIsNone(tempo.from_header(["1=C", "作词：邱字林", "3", "4"]))
+
+    def _score(self, title: str) -> Path:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        path = Path(temp.name) / "score.musicxml"
+        path.write_text(_PAGE_XML.replace("<part-list>", f"<work><work-title>{title}</work-title></work><part-list>"),
+                        encoding="utf-8")
+        return path
+
+    def test_title_taken_by_the_tempo_line_is_given_back(self) -> None:
+        """Крупную строку «中速深情地» движок делает названием вместо «梦里故乡»."""
+        path = self._score("中速深情地")
+        tempo.apply(path, [HeaderLine("梦里故乡", 34, 629, 33), HeaderLine("1=C", 26, 118, 74),
+                           HeaderLine("作词：邱字林", 32, 1085, 75), HeaderLine("中速深情地", 31, 154, 125)])
+        root = ET.parse(path).getroot()
+        self.assertEqual(root.findtext("work/work-title"), "梦里故乡")
+        self.assertEqual(root.find(".//sound").get("tempo"), "88")
+
+    def test_tempo_word_inside_a_real_title_is_left_alone(self) -> None:
+        """«如歌的行板» — название пьесы, а не указание темпа."""
+        path = self._score("如歌的行板")
+        notes = tempo.apply(path, [HeaderLine("如歌的行板", 34, 600, 30), HeaderLine("1=D", 26, 118, 74)])
+        root = ET.parse(path).getroot()
+        self.assertEqual(root.findtext("work/work-title"), "如歌的行板")
+        self.assertIsNone(root.find(".//sound"))
+        self.assertIn("темп: на листе не указан", notes)
 
 
 class JianpuRoutingTest(unittest.TestCase):

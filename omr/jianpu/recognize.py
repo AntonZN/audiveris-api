@@ -21,7 +21,7 @@ import cv2
 
 from omr.engines import jianpu_engine
 from omr.engines.homr_engine import EngineError
-from omr.jianpu import voices
+from omr.jianpu import tempo, voices
 from omr.merge import MergeReport, merge
 from omr.stages import load as load_stage
 from omr.stages import pdf as pdf_stage
@@ -39,6 +39,8 @@ class JianpuPage:
     stem: str = ""       # имя выхода страницы
     musicxml: Path | None = None
     error: str = ""
+    # Строки заголовка, как их прочитал движок (см. omr/engines/_jianpu_runner.mjs).
+    header: list[jianpu_engine.HeaderLine] = field(default_factory=list)
 
 
 @dataclass
@@ -50,6 +52,8 @@ class JianpuResult:
     merge_report: MergeReport | None = None
     # Причина отказа до движка (многоголосие); пусто — движок запускался.
     refused: str = ""
+    # Что сделано с темпом и названием (omr/jianpu/tempo.py).
+    notes: list[str] = field(default_factory=list)
 
     @property
     def recognised(self) -> int:
@@ -68,6 +72,7 @@ class JianpuResult:
             lines.append(f"  склейка: страниц {report.pages}, партий {report.parts}, "
                          f"тактов {report.measures}")
             lines += [f"    {note}" for note in report.notes]
+        lines += [f"  {note}" for note in self.notes]
         return "\n".join(lines)
 
 
@@ -183,8 +188,16 @@ def recognize(
     for page in pages:
         page.musicxml = run.outputs.get(page.stem)
         page.error = run.errors.get(page.stem, "")
-    result = JianpuResult(None, pages, run.seconds, run.log)
-    return assemble(result, output_dir / f"{stem}.musicxml")
+        page.header = run.headers.get(page.stem, [])
+    result = assemble(JianpuResult(None, pages, run.seconds, run.log), output_dir / f"{stem}.musicxml")
+    if result.musicxml is not None:
+        # Темп и название стоят в начале пьесы — заголовок первой прочитанной страницы.
+        header = next((page.header for page in pages if page.header), [])
+        try:
+            result.notes = tempo.apply(result.musicxml, header)
+        except Exception as exc:  # noqa: BLE001 — темп необязателен, ноты важнее
+            result.notes = [f"темп и название: правка упала ({type(exc).__name__}: {exc})"]
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:

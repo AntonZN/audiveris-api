@@ -89,7 +89,7 @@ RUN homr --init
 # той же стадии, где пакет собран и проверен.
 COPY --from=jpeditor /usr/local/bin/node /usr/local/bin/node
 COPY --from=jpeditor /opt/jpeditor-omr /opt/jpeditor-omr
-ENV OMR_JIANPU_CLI=/opt/jpeditor-omr/omr-cli.mjs
+ENV OMR_JIANPU_PACKAGE=/opt/jpeditor-omr
 
 COPY api /srv/api
 # Пакет подготовки страниц; api/omr_bridge.py зовёт его.
