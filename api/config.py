@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     # проверку.
     min_recognized_notes: int = 3
 
+    # --- Цзянпу (пресет jianpu) ---
+    # Цифровую нотацию распознаёт движок jpeditor (omr/engines/jianpu_engine.py),
+    # мимо homr и Audiveris. Таймаут — на весь запуск: все страницы задачи идут в
+    # движок одним процессом (~2.4 c загрузка модели, дальше ~0.3-1 c на страницу).
+    jianpu_timeout_seconds: int = 180
+
     # --- Каталог нот / админка ---
     # Postgres. Внутри docker-compose host = "postgres".
     database_url: str = "postgresql+psycopg2://catalog:catalog@postgres:5432/catalog"

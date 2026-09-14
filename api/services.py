@@ -13,7 +13,7 @@ from PIL import Image, ImageEnhance
 
 from api.config import settings
 from api.exceptions import LowInterlineError, ProcessingError
-from api import drums, omr_bridge
+from api import drums, jianpu, omr_bridge
 from api.homr_service import homr_service, is_photo
 from api.models import FileResult, ScoreTexts
 from api.presets import Preset, get_preset_args
@@ -411,8 +411,10 @@ class AudiverisService:
         Audiveris из этой цепочки выведен: не смог homr — значит не смог. Раньше он
         стоял тут третьей попыткой и добирал темп отдельным прогоном.
 
-        Исключение — пресеты ударных (`drums`, `drums_1line`): их homr не знает,
-        поэтому они идут прямо в Audiveris, минуя обе попытки (`_recognize_drums`).
+        Исключения — пресеты ударных (`drums`, `drums_1line`): их homr не знает,
+        поэтому они идут прямо в Audiveris, минуя обе попытки (`_recognize_drums`);
+        и цзянпу (`jianpu`): цифровую нотацию не читает ни homr, ни Audiveris, она
+        идёт в движок jpeditor (`_recognize_jianpu`).
 
         Постобработка (analysis/bpm/texts + renders_ok + repair + salvage) для
         всех путей одна и та же.
@@ -420,6 +422,8 @@ class AudiverisService:
         try:
             if drums.is_drum_preset(preset):
                 return self._recognize_drums(input_path, output_dir, preset, enhance)
+            if jianpu.is_jianpu_preset(preset):
+                return self._recognize_jianpu([input_path], output_dir, input_path.stem)
 
             omr_failure: ProcessingError | None = None
             if settings.omr_pipeline_enabled and omr_bridge.is_supported(input_path):
@@ -532,6 +536,8 @@ class AudiverisService:
         try:
             if drums.is_drum_preset(preset):
                 return self._recognize_drums_playlist(input_paths, output_dir, preset, enhance)
+            if jianpu.is_jianpu_preset(preset):
+                return self._recognize_jianpu(input_paths, output_dir, "playlist")
 
             if input_paths and all(self._can_recognise(p) for p in input_paths):
                 output_path, log_path = self._run_homr_playlist(input_paths, output_dir)
@@ -612,6 +618,19 @@ class AudiverisService:
                 log_path=last_log,
             ) from exc
         return merged_path, last_log
+
+    def _recognize_jianpu(
+            self, input_paths: list[Path], output_dir: Path, stem: str,
+    ) -> FileResult:
+        """Цзянпу: сразу движок jpeditor, без omr, homr и Audiveris.
+
+        Провал — честная ошибка, без отката на homr: цифр он не читает, а
+        «успешная» партитура из случайных нот хуже ошибки.
+        """
+        if not input_paths:
+            raise ProcessingError("Плейлист пуст")
+        output_path, log_path = jianpu.run(input_paths, output_dir, stem)
+        return self._build_success_result(output_path, log_path)
 
     # Audiveris ловит «новый movement» по indented system'у (см. SystemManager.java).
     # На фотках/скриншотах одной песни это даёт false positive: если на каком-то

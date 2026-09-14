@@ -1,0 +1,610 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1">
+  <work>
+    <work-title>唱古人</work-title>
+  </work>
+  <identification>
+    <encoding>
+      <software>omr.jianpu</software>
+    </encoding>
+  </identification>
+  <part-list>
+    <score-part id="P1">
+      <part-name>Melody</part-name>
+    </score-part>
+  </part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>2</divisions>
+        <key>
+          <fifths>0</fifths>
+        </key>
+        <time>
+          <beats>2</beats>
+          <beat-type>4</beat-type>
+        </time>
+        <clef>
+          <sign>G</sign>
+          <line>2</line>
+        </clef>
+      </attributes>
+      <note>
+        <pitch>
+          <step>A</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>春</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>春</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>夏</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>夏</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>A</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>季</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>季</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>季</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>季</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>G</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>2</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>里</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>里</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>里</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>里</text>
+        </lyric>
+      </note>
+    </measure>
+    <measure number="2">
+      <note>
+        <pitch>
+          <step>A</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>什</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>龙</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>个</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>玉</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>A</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>么</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>爪</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>么</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>米</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>G</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>2</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>花</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>花</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>花</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>花</text>
+        </lyric>
+      </note>
+    </measure>
+    <measure number="3">
+      <note>
+        <pitch>
+          <step>C</step>
+          <octave>5</octave>
+        </pitch>
+        <duration>2</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>人</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>人</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>杆</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>杆</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>A</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>2</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>人</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>人</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>儿</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>儿</text>
+        </lyric>
+      </note>
+    </measure>
+    <measure number="4">
+      <note>
+        <pitch>
+          <step>G</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>所</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>所</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>高</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>高</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>A</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>2</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>爱</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>爱</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>长</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>长</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>E</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+      </note>
+    </measure>
+    <measure number="5">
+      <note>
+        <pitch>
+          <step>A</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>什</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>孔</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>什</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>小</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>A</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>么</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>夫</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>么</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>黄</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>E</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>人</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>子</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>人</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>巢</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>G</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+      </note>
+    </measure>
+    <measure number="6">
+      <note>
+        <pitch>
+          <step>G</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>弟</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>弟</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>题</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>题</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>G</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>子</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>子</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>反</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>反</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>A</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>三</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>三</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>诗</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>诗</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>A</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>千</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>千</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>呀</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>呀</text>
+        </lyric>
+      </note>
+    </measure>
+    <measure number="7">
+      <note>
+        <pitch>
+          <step>C</step>
+          <octave>5</octave>
+        </pitch>
+        <duration>2</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>名</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>名</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>率</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>率</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>A</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>2</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>传</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>传</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>众</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>众</text>
+        </lyric>
+      </note>
+    </measure>
+    <measure number="8">
+      <note>
+        <pitch>
+          <step>G</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>2</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+        <lyric number="1">
+          <syllabic>single</syllabic>
+          <text>后</text>
+        </lyric>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>后</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>称</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>称</text>
+        </lyric>
+      </note>
+      <note>
+        <pitch>
+          <step>E</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+      </note>
+      <note>
+        <pitch>
+          <step>D</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>1</duration>
+        <voice>1</voice>
+        <type>eighth</type>
+      </note>
+    </measure>
+    <measure number="9">
+      <note>
+        <pitch>
+          <step>C</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>4</duration>
+        <voice>1</voice>
+        <type>half</type>
+        <lyric number="2">
+          <syllabic>single</syllabic>
+          <text>代</text>
+        </lyric>
+        <lyric number="3">
+          <syllabic>single</syllabic>
+          <text>王</text>
+        </lyric>
+        <lyric number="4">
+          <syllabic>single</syllabic>
+          <text>王</text>
+        </lyric>
+      </note>
+      <barline location="right">
+        <bar-style>light-heavy</bar-style>
+      </barline>
+    </measure>
+  </part>
+</score-partwise>

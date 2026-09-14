@@ -119,3 +119,7 @@ __pycache__/
 *.mxl
 *.png
 *.jpg
+# Эталоны цзянпу — в git: по ним меряет omr/jianpu/bench.py.
+!tests/images/jianpu/**/*.musicxml
+# Сборка движка цзянпу под платформу машины (scripts/build_jpeditor_omr.sh).
+vendor/

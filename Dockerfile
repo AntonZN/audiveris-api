@@ -14,6 +14,19 @@ COPY --exclude=api . .
 
 RUN ./gradlew :app:distTar --no-daemon
 
+# Движок цзянпу — OMR из jpeditor: самодостаточный пакет под платформу образа
+# (sharp и onnxruntime-node нативные). Сборка — scripts/build_jpeditor_omr.sh.
+FROM node:22-bookworm-slim AS jpeditor
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY scripts/build_jpeditor_omr.sh /tmp/build_jpeditor_omr.sh
+RUN bash /tmp/build_jpeditor_omr.sh /opt/jpeditor-omr
+
 FROM eclipse-temurin:25-jdk-noble
 
 RUN apt-get update \
@@ -71,6 +84,12 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 # Запекаем ONNX-модели homr (сегментация + трансформер + OCR заголовков) в образ,
 # чтобы первый запрос не качал их в рантайме.
 RUN homr --init
+
+# Node нужен только движку цзянпу (пресет jianpu, api/jianpu.py). Бинарник — из
+# той же стадии, где пакет собран и проверен.
+COPY --from=jpeditor /usr/local/bin/node /usr/local/bin/node
+COPY --from=jpeditor /opt/jpeditor-omr /opt/jpeditor-omr
+ENV OMR_JIANPU_CLI=/opt/jpeditor-omr/omr-cli.mjs
 
 COPY api /srv/api
 # Пакет подготовки страниц; api/omr_bridge.py зовёт его.

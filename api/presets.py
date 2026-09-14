@@ -15,6 +15,7 @@ class Preset(str, Enum):
     vocal = "vocal"
     piano = "piano"
     small_notes = "small_notes"
+    jianpu = "jianpu"
 
 
 # Base constant prefix
@@ -81,6 +82,10 @@ PRESET_CONSTANTS: dict[Preset, list[str]] = {
         f"{_PREFIX}.smallHeads=true",
         f"{_PREFIX}.smallBeams=true",
     ],
+
+    Preset.jianpu: [
+        # Audiveris не участвует: цифровую нотацию распознаёт jpeditor (api/jianpu.py).
+    ],
 }
 
 
@@ -108,5 +113,6 @@ def get_preset_description(preset: Preset) -> str:
         Preset.vocal: "Vocal/choir with lyrics above and below staff",
         Preset.piano: "Piano (2-staff parts, articulations)",
         Preset.small_notes: "Scores with cue/small notes and beams",
+        Preset.jianpu: "Numbered notation 简谱 (jpeditor engine, not Audiveris)",
     }
     return descriptions.get(preset, "Unknown preset")

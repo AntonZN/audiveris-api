@@ -456,9 +456,11 @@ def collect(inputs: list[str]) -> list[Path]:
     for item in inputs:
         path = Path(item)
         if path.is_dir():
+            # Папки jianpu — эталоны цифровой нотации (omr/jianpu): нотный движок их
+            # не читает, а синтетических листов там десятки.
             paths += sorted(p for p in path.rglob("*")
                             if p.suffix.lower() in wanted and ".clean" not in p.suffixes
-                            and ".pages" not in str(p))
+                            and ".pages" not in str(p) and "jianpu" not in p.parts)
         else:
             paths.append(path)
     return paths

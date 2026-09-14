@@ -152,6 +152,7 @@ def _build_task(
 | `vocal` | Вокал с текстом (не проверял, не понятно что проверять, но режим существует)|
 | `piano` | Фортепиано |
 | `small_notes` | Ноты с cue/маленькими нотами |
+| `jianpu` | Цифровая нотация 简谱 (движок jpeditor) |
 """,
     responses={
         200: {"description": "Задача успешно создана"},
@@ -160,7 +161,7 @@ def _build_task(
 )
 async def create_single_task(
     file: UploadFile = File(..., description="Файл изображения (PNG, JPG, WebP) или PDF (до 5 страниц)"),
-    preset: Preset = Form(Preset.default, description="Пресет обработки. Сейчас на распознавание не влияет: параметр настраивает Audiveris, а распознаёт homr. Принимается для совместимости"),
+    preset: Preset = Form(Preset.default, description="Пресет обработки. Движок меняют `drums`, `drums_1line` (Audiveris) и `jianpu` (цифровая нотация, jpeditor); остальные на распознавание не влияют и принимаются для совместимости"),
     enhance: bool = Form(False, description="Агрессивная обработка фото/скриншотов. Сейчас на распознавание не влияет: подготовку страницы делает пайплайн omr, и делает её всегда. Принимается для совместимости"),
 ) -> TaskCreateResponse:
     """Создать задачу OMR для одного файла."""
@@ -238,6 +239,7 @@ async def create_single_task(
 | `vocal` | Вокал с текстом |
 | `piano` | Фортепиано |
 | `small_notes` | Ноты с cue/маленькими нотами |
+| `jianpu` | Цифровая нотация 简谱 (движок jpeditor) |
 """,
     responses={
         200: {"description": "Задача успешно создана"},
@@ -246,7 +248,7 @@ async def create_single_task(
 )
 async def create_batch_task(
     files: list[UploadFile] = File(..., description="Файлы изображений (PNG, JPG)"),
-    preset: Preset = Form(Preset.default, description="Пресет обработки. Сейчас на распознавание не влияет: параметр настраивает Audiveris, а распознаёт homr. Принимается для совместимости"),
+    preset: Preset = Form(Preset.default, description="Пресет обработки. Движок меняют `drums`, `drums_1line` (Audiveris) и `jianpu` (цифровая нотация, jpeditor); остальные на распознавание не влияют и принимаются для совместимости"),
     enhance: bool = Form(False, description="Агрессивная обработка фото/скриншотов. Сейчас на распознавание не влияет: подготовку страницы делает пайплайн omr, и делает её всегда. Принимается для совместимости"),
 ) -> TaskCreateResponse:
     """Создать задачу OMR для нескольких файлов (плейлист)."""

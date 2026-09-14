@@ -23,3 +23,6 @@ zeus_eval
 .cocoindex_code
 **/__pycache__
 .pytest_cache
+# Локальная сборка движка цзянпу (scripts/build_jpeditor_omr.sh): под платформу
+# машины разработчика, образ собирает свою в стадии jpeditor.
+vendor
