@@ -2,6 +2,7 @@
 
 Сущности:
   Author / Genre / Style / Instrument — справочники (админ ведёт сам)
+  SoundFont                           — звуки для воспроизведения (.sf2 качает приложение)
   Score                               — нота (несколько файлов: обложка + mxl/midi/mp3/pdf)
   Collection / CollectionItem         — подборки (упорядоченный список нот)
   AppUser / Rating / PlayEvent        — пользователи приложения и их активность
@@ -38,6 +39,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from api.catalog_enums import Difficulty
 from api.db import Base
+from api.localization import with_default_en
 from api.storage import storage
 
 
@@ -153,6 +155,9 @@ class Instrument(Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     slug: Mapped[str] = mapped_column(String(140), unique=True, index=True)
     icon = Column(ImageType(storage=storage), nullable=True)
+    # Переводы названия {код языка: перевод}; `en` всегда есть и по умолчанию
+    # равен `name` (см. хук внизу файла).
+    localization: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     def __str__(self) -> str:
         return self.name
@@ -169,6 +174,33 @@ class Tag(Base):
         secondary=score_tags,
         back_populates="tags",
     )
+
+    def __str__(self) -> str:
+        return self.name
+
+
+# --------------------------------------------------------------------------- #
+# Звуки воспроизведения
+# --------------------------------------------------------------------------- #
+class SoundFont(Base):
+    """Звук, которым приложение проигрывает партитуру.
+
+    `.sf2` не зашит в приложение: пользователь выбирает звук, приложение
+    скачивает файл по `downloadUrl`. `preview` — короткий фрагмент, чтобы
+    послушать до скачивания.
+    """
+
+    __tablename__ = "soundfonts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    file = Column(FileType(storage=storage), nullable=False)
+    preview = Column(FileType(storage=storage), nullable=True)
+    # {код языка: перевод}; `en` по умолчанию равен `name` (хук внизу файла).
+    localization: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Порядок в списке приложения: меньше — выше.
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     def __str__(self) -> str:
         return self.name
@@ -447,3 +479,17 @@ def _register_slug_events() -> None:
 
 
 _register_slug_events()
+
+
+# --------------------------------------------------------------------------- #
+# Локализация: `en` = name, если его не задали
+# --------------------------------------------------------------------------- #
+def _default_en(mapper, connection, target):
+    localization = with_default_en(target.localization, target.name)
+    if localization != target.localization:
+        target.localization = localization
+
+
+for _model in (Instrument, SoundFont):
+    event.listen(_model, "before_insert", _default_en)
+    event.listen(_model, "before_update", _default_en)

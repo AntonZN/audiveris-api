@@ -6,6 +6,7 @@ name/title (исключён из форм), поэтому в админке е
 """
 
 from datetime import datetime, timedelta, timezone
+from itertools import zip_longest
 import logging
 from pathlib import Path
 from typing import Any
@@ -18,12 +19,18 @@ from sqladmin.fields import FileField as AdminFileField
 from sqladmin.widgets import FileInputWidget
 from sqlalchemy import select
 from starlette.exceptions import HTTPException
+from starlette.datastructures import UploadFile
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from wtforms import Field
 from wtforms import widgets as wtforms_widgets
+from wtforms.utils import unset_value
+from wtforms.validators import Optional as OptionalValidator
+from wtforms.validators import ValidationError
 
 from api.db import SessionLocal
+from api.localization import MAX_VALUE_LENGTH as MAX_LOCALIZATION_LENGTH
+from api.localization import parse_rows as parse_localization_rows
 
 # Кастомные шаблоны форм (переинициализация select2 с minimumInputLength=0).
 logger = logging.getLogger(__name__)
@@ -61,6 +68,7 @@ from api.catalog_models import (
     Rating,
     Score,
     ScoreFormat,
+    SoundFont,
     SourceType,
     Style,
     Tag,
@@ -134,8 +142,14 @@ class PublicMediaFileInputWidget(FileInputWidget):
     """FileInput SQLAdmin, который не раскрывает путь внутри контейнера."""
 
     def __call__(self, field: Field, **kwargs: Any) -> Markup:
+        data = field.data
+        # После ошибки валидации форма рендерится из отправленных данных: там
+        # UploadFile, а не сохранённый файл, и ссылку на него не построить.
+        if isinstance(data, UploadFile):
+            data = None
+
         checkbox = Markup()
-        if not field.flags.required and field.data:
+        if not field.flags.required and data:
             checkbox_id = f"{field.id}_checkbox"
             safe_checkbox_id = escape(checkbox_id)
             checkbox = Markup(
@@ -147,8 +161,8 @@ class PublicMediaFileInputWidget(FileInputWidget):
             )
 
         current = Markup()
-        if field.data:
-            src = _media_src(field.data)
+        if data:
+            src = _media_src(data)
             if src:
                 safe_src = escape(src)
                 current = Markup(
@@ -156,7 +170,7 @@ class PublicMediaFileInputWidget(FileInputWidget):
                     f'rel="noopener">{safe_src}</a></p>'
                 )
             else:
-                current = Markup(f"<p>Сейчас: {escape(Path(str(field.data)).name)}</p>")
+                current = Markup(f"<p>Сейчас: {escape(Path(str(data)).name)}</p>")
             # Существующее значение удовлетворяет required-валидатору.
             field.flags.required = False
 
@@ -166,6 +180,227 @@ class PublicMediaFileInputWidget(FileInputWidget):
 
 class PublicMediaFileField(AdminFileField):
     widget = PublicMediaFileInputWidget()
+
+
+_AUDIO_EXTS = {".mp3", ".wav", ".ogg", ".oga", ".m4a", ".aac", ".flac", ".opus"}
+
+
+def _media_formatter(attr_name: str):
+    """Аудио — плеером (послушать прямо из списка), картинка — превью,
+    прочие файлы (.sf2) — ссылкой с именем файла."""
+
+    def _fmt(model, attribute):
+        src = _media_src(getattr(model, attr_name, None))
+        if not src:
+            return ""
+        safe_src = escape(src)
+        path = Path(urlsplit(src).path)
+        if path.suffix.lower() in _AUDIO_EXTS:
+            return Markup(
+                f'<audio controls preload="none" src="{safe_src}" '
+                'style="height:32px;max-width:260px;vertical-align:middle;"></audio>'
+            )
+        if path.suffix.lower() in _IMAGE_EXTS:
+            return _image_formatter(attr_name)(model, attribute)
+        return Markup(
+            f'<a href="{safe_src}" target="_blank" rel="noopener">'
+            f"{escape(path.name)}</a>"
+        )
+
+    return _fmt
+
+
+class KeepStoredFilesMixin:
+    """Не пересохранять файл, который в форме не меняли.
+
+    SQLAdmin при сохранении подкладывает текущий файл как новую загрузку, а
+    CatalogStorage без перезаписи кладёт его копией `name_1.ext`. Итог каждой
+    правки (хоть перевода) — дубль на диске и новая ссылка, по которой
+    приложение заново скачало бы тот же .sf2. Такие «загрузки» выкидываем.
+    """
+
+    async def on_model_change(self, data, model, is_created, request) -> None:
+        if not is_created:
+            for key, value in list(data.items()):
+                if not isinstance(value, UploadFile):
+                    continue
+                stored_path = getattr(getattr(model, key, None), "path", None)
+                # Подложенный файл открыт прямо из хранилища — по пути и узнаём.
+                if stored_path and getattr(value.file, "name", None) == stored_path:
+                    value.file.close()
+                    del data[key]
+        await super().on_model_change(data, model, is_created, request)
+
+
+SOUNDFONT_EXTS = (".sf2", ".sf3")
+
+
+class SoundFontFileField(PublicMediaFileField):
+    """Обязательный файл .sf2/.sf3."""
+
+    def pre_validate(self, form) -> None:
+        filename = getattr(self.data, "filename", None) or ""
+        allowed = " или ".join(SOUNDFONT_EXTS)
+        if not filename:
+            raise ValidationError(f"Загрузите файл {allowed}")
+        if Path(filename).suffix.lower() not in SOUNDFONT_EXTS:
+            raise ValidationError(f"Нужен файл {allowed}, а загружен «{filename}»")
+
+
+def _localization_list_formatter(model, attribute):
+    """В списке — только коды языков: сразу видно, где не хватает переводов."""
+    return " · ".join(model.localization or {})
+
+
+def _localization_detail_formatter(model, attribute):
+    return Markup("<br>").join(
+        Markup("<code>{}</code> — {}").format(lang, value)
+        for lang, value in (model.localization or {}).items()
+    )
+
+
+# Подсказки для поля «язык» (datalist): можно выбрать или ввести свой код.
+_COMMON_LANGS = (
+    ("en", "English"),
+    ("ru", "Русский"),
+    ("uk", "Українська"),
+    ("de", "Deutsch"),
+    ("fr", "Français"),
+    ("es", "Español"),
+    ("it", "Italiano"),
+    ("pt", "Português"),
+    ("pt-BR", "Português (Brasil)"),
+    ("pl", "Polski"),
+    ("tr", "Türkçe"),
+    ("kk", "Қазақ"),
+    ("ja", "日本語"),
+    ("ko", "한국어"),
+    ("zh-Hans", "中文（简体）"),
+    ("zh-Hant", "中文（繁體）"),
+    ("ar", "العربية"),
+)
+
+
+_LOCALIZATION_HINT = (
+    "Код языка (en, ru, de, pt-BR…) и название на этом языке. Пустые строки "
+    "не сохраняются. Если en не задан, он берётся из «Название (en)»."
+)
+
+
+class LocalizationWidget:
+    """Таблица «язык → перевод» с добавлением и удалением строк вместо JSON."""
+
+    def _row(self, field: Field, lang: str = "", value: str = "") -> Markup:
+        return Markup(
+            "<tr>"
+            '<td><input type="text" class="form-control form-control-sm" '
+            'name="{name}-lang" value="{lang}" list="{id}-langs" placeholder="ru" '
+            'maxlength="16" autocomplete="off" spellcheck="false" aria-label="Код языка"></td>'
+            '<td><input type="text" class="form-control form-control-sm" '
+            'name="{name}-value" value="{value}" placeholder="Пианино" '
+            'maxlength="{maxlength}" aria-label="Перевод"></td>'
+            '<td class="text-end"><button type="button" class="btn btn-sm btn-ghost-danger" '
+            'data-l10n-remove title="Удалить" aria-label="Удалить язык">'
+            '<i class="fa-solid fa-xmark"></i></button></td>'
+            "</tr>"
+        ).format(
+            name=field.name,
+            id=field.id,
+            lang=lang,
+            value=value,
+            maxlength=MAX_LOCALIZATION_LENGTH,
+        )
+
+    def __call__(self, field: Field, **kwargs: Any) -> Markup:
+        css = f"{kwargs.get('class_', '')} {kwargs.get('class', '')}"
+        invalid = " is-invalid" if "is-invalid" in css else ""
+        rows = Markup("").join(self._row(field, lang, value) for lang, value in field.rows_for_render())
+        options = Markup("").join(
+            Markup('<option value="{}">{}</option>').format(code, label)
+            for code, label in _COMMON_LANGS
+        )
+        return Markup(
+            '<div class="l10n-editor{invalid}" id="{id}">'
+            '<table class="table table-sm table-borderless mb-1" style="max-width:640px">'
+            "<thead><tr>"
+            '<th style="width:150px">Язык</th><th>Перевод</th><th style="width:1%"></th>'
+            "</tr></thead>"
+            "<tbody>{rows}{blank}</tbody>"
+            "</table>"
+            '<button type="button" class="btn btn-sm btn-outline-primary" data-l10n-add>'
+            '<i class="fa-solid fa-plus me-1"></i>Добавить язык</button>'
+            "<template>{blank}</template>"
+            '<datalist id="{id}-langs">{options}</datalist>'
+            "<script>(function () {{"
+            'var root = document.getElementById("{id}");'
+            'var tbody = root.querySelector("tbody");'
+            'var tpl = root.querySelector("template");'
+            "function addRow(focus) {{"
+            "  var row = tpl.content.firstElementChild.cloneNode(true);"
+            "  tbody.appendChild(row);"
+            '  if (focus) row.querySelector("input").focus();'
+            "}}"
+            'root.addEventListener("click", function (e) {{'
+            '  var remove = e.target.closest("[data-l10n-remove]");'
+            "  if (remove) {{"
+            '    remove.closest("tr").remove();'
+            "    if (!tbody.rows.length) addRow(false);"
+            "  }} else if (e.target.closest(\"[data-l10n-add]\")) {{"
+            "    addRow(true);"
+            "  }}"
+            "}});"
+            "}})();</script>"
+            "</div>"
+        ).format(
+            invalid=invalid,
+            id=field.id,
+            rows=rows,
+            blank=self._row(field),
+            options=options,
+        )
+
+
+class LocalizationField(Field):
+    """Переводы {язык: текст}. Строки приходят парами `<name>-lang`/`<name>-value`."""
+
+    widget = LocalizationWidget()
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # SQLAdmin вешает Optional на nullable-колонки. Он смотрит в raw_data по
+        # имени поля — у нас там пусто (инпуты `<name>-lang`/`-value`), и Optional
+        # стёр бы ошибки разбора: форма «сохранилась» бы со старыми переводами.
+        kwargs["validators"] = [
+            v for v in kwargs.get("validators") or [] if not isinstance(v, OptionalValidator)
+        ]
+        super().__init__(*args, **kwargs)
+        self.rows: list[tuple[str, str]] | None = None
+
+    def process(self, formdata, data=unset_value, extra_filters=None):
+        self.rows = None
+        if formdata is not None:
+            self.rows = list(
+                zip_longest(
+                    formdata.getlist(f"{self.name}-lang"),
+                    formdata.getlist(f"{self.name}-value"),
+                    fillvalue="",
+                )
+            )
+        super().process(formdata, data, extra_filters)
+
+    def process_formdata(self, valuelist):
+        if self.rows is None:
+            return
+        data, errors = parse_localization_rows(self.rows)
+        if errors:
+            self.process_errors.extend(errors)
+        else:
+            self.data = data
+
+    def rows_for_render(self) -> list[tuple[str, str]]:
+        # После ошибки показываем то, что ввели, а не сохранённое в БД.
+        if self.rows is not None:
+            return [(lang, value) for lang, value in self.rows if lang.strip() or value.strip()]
+        return list((self.data or {}).items())
 
 
 # Расширения, которые в архиве провалов имеет смысл показывать превьюшкой.
@@ -299,7 +534,7 @@ class AdminAuth(AuthenticationBackend):
 # --------------------------------------------------------------------------- #
 # Справочники
 # --------------------------------------------------------------------------- #
-class AuthorAdmin(ModelView, model=Author):
+class AuthorAdmin(KeepStoredFilesMixin, ModelView, model=Author):
     name = "Автор"
     name_plural = "Авторы"
     category = "Каталог"
@@ -334,18 +569,36 @@ class StyleAdmin(ModelView, model=Style):
     form_excluded_columns = [Style.slug, Style.scores]
 
 
-class InstrumentAdmin(ModelView, model=Instrument):
+class InstrumentAdmin(KeepStoredFilesMixin, ModelView, model=Instrument):
     name = "Инструмент"
     name_plural = "Инструменты"
     category = "Каталог"
     icon = "fa-solid fa-guitar"
-    column_list = [Instrument.icon, Instrument.id, Instrument.name]
+    column_list = [
+        Instrument.icon,
+        Instrument.id,
+        Instrument.name,
+        Instrument.localization,
+    ]
     column_searchable_list = [Instrument.name]
+    column_labels = {
+        "icon": "Иконка",
+        "name": "Название (en)",
+        "localization": "Переводы",
+    }
     form_excluded_columns = [Instrument.slug]
-    form_overrides = {"icon": PublicMediaFileField}
-    column_formatters = {Instrument.icon: _image_formatter("icon")}
+    form_overrides = {
+        "icon": PublicMediaFileField,
+        "localization": LocalizationField,
+    }
+    form_args = {"localization": {"description": _LOCALIZATION_HINT}}
+    column_formatters = {
+        Instrument.icon: _image_formatter("icon"),
+        Instrument.localization: _localization_list_formatter,
+    }
     column_formatters_detail = {
-        Instrument.icon: _image_formatter("icon", size=240)
+        Instrument.icon: _image_formatter("icon", size=240),
+        Instrument.localization: _localization_detail_formatter,
     }
 
 
@@ -361,9 +614,62 @@ class TagAdmin(ModelView, model=Tag):
 
 
 # --------------------------------------------------------------------------- #
+# Звуки воспроизведения
+# --------------------------------------------------------------------------- #
+class SoundFontAdmin(KeepStoredFilesMixin, ModelView, model=SoundFont):
+    name = "Звук"
+    name_plural = "Звуки (sf2)"
+    category = "Каталог"
+    icon = "fa-solid fa-sliders"
+    column_list = [
+        SoundFont.id,
+        SoundFont.name,
+        SoundFont.localization,
+        SoundFont.preview,
+        SoundFont.file,
+        SoundFont.position,
+    ]
+    column_searchable_list = [SoundFont.name]
+    column_sortable_list = [SoundFont.id, SoundFont.name, SoundFont.position]
+    column_default_sort = [("position", False), ("name", False)]
+    column_labels = {
+        "name": "Название (en)",
+        "file": "Файл .sf2",
+        "preview": "Превью",
+        "localization": "Переводы",
+        "position": "Порядок",
+        "created_at": "Добавлен",
+    }
+    form_excluded_columns = [SoundFont.created_at]
+    form_overrides = {
+        "file": SoundFontFileField,
+        "preview": PublicMediaFileField,
+        "localization": LocalizationField,
+    }
+    form_args = {
+        "file": {"description": "SoundFont, который скачивает приложение: .sf2 или .sf3."},
+        "preview": {
+            "description": "Короткий фрагмент (mp3, m4a…), чтобы послушать звук до скачивания."
+        },
+        "localization": {"description": _LOCALIZATION_HINT},
+        "position": {"description": "Порядок в списке приложения: меньше — выше."},
+    }
+    column_formatters = {
+        SoundFont.preview: _media_formatter("preview"),
+        SoundFont.file: _media_formatter("file"),
+        SoundFont.localization: _localization_list_formatter,
+    }
+    column_formatters_detail = {
+        SoundFont.preview: _media_formatter("preview"),
+        SoundFont.file: _media_formatter("file"),
+        SoundFont.localization: _localization_detail_formatter,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Ноты и подборки
 # --------------------------------------------------------------------------- #
-class ScoreAdmin(ModelView, model=Score):
+class ScoreAdmin(KeepStoredFilesMixin, ModelView, model=Score):
     name = "Нота"
     name_plural = "Ноты"
     category = "Каталог"
@@ -600,7 +906,7 @@ class ScoreAdmin(ModelView, model=Score):
             }
 
 
-class CollectionAdmin(ModelView, model=Collection):
+class CollectionAdmin(KeepStoredFilesMixin, ModelView, model=Collection):
     name = "Подборка"
     name_plural = "Подборки"
     category = "Каталог"
@@ -906,6 +1212,7 @@ def init_admin(app: FastAPI) -> Admin:
         StyleAdmin,
         InstrumentAdmin,
         TagAdmin,
+        SoundFontAdmin,
         AppUserAdmin,
         RatingAdmin,
         PlayEventAdmin,

@@ -24,6 +24,7 @@ from api.catalog_models import (
     PlayEvent,
     Rating,
     Score,
+    SoundFont,
     Style,
     Tag,
     score_genres,
@@ -31,10 +32,12 @@ from api.catalog_models import (
     score_tags,
 )
 from api.catalog_schemas import (
+    AuthorListItem,
     AuthorOut,
     CollectionDetail,
     CollectionListItem,
     CollectionListResponse,
+    InstrumentListItem,
     InstrumentOut,
     PopularInstrumentOut,
     RateRequest,
@@ -42,6 +45,7 @@ from api.catalog_schemas import (
     ScoreListItem,
     ScoreListResponse,
     ScoreStats,
+    SoundFontOut,
     TagListResponse,
     TermOut,
 )
@@ -146,14 +150,56 @@ def list_styles(db: Session = Depends(get_db)) -> list[TermOut]:
 
 @router.get(
     "/instruments",
-    response_model=list[InstrumentOut],
+    response_model=list[InstrumentListItem],
     summary="Список инструментов",
 )
-def list_instruments(db: Session = Depends(get_db)) -> list[InstrumentOut]:
-    """Все инструменты (`id`, `name`, `slug`, `iconUrl`). `slug` используется
-    в фильтре `?instrument=<slug>`; `iconUrl` может быть null."""
+def list_instruments(db: Session = Depends(get_db)) -> list[InstrumentListItem]:
+    """Все инструменты по алфавиту. `slug` используется в фильтре
+    `?instrument=<slug>`; `iconUrl` может быть null.
+
+    `localization` — переводы названия `{ "en": "Piano", "ru": "Пианино", … }`;
+    ключ `en` есть всегда (по умолчанию равен `name`), остальные языки — какие
+    заведены в админке. Если нужного языка нет, показывайте `en`."""
     rows = db.execute(select(Instrument).order_by(Instrument.name)).scalars().all()
-    return [_instrument_out(r) for r in rows]
+    return [
+        InstrumentListItem(
+            **_instrument_out(r).model_dump(by_alias=False),
+            localization=r.localization or {},
+        )
+        for r in rows
+    ]
+
+
+@router.get(
+    "/soundfonts",
+    response_model=list[SoundFontOut],
+    summary="Звуки воспроизведения (.sf2)",
+)
+def list_soundfonts(db: Session = Depends(get_db)) -> list[SoundFontOut]:
+    """Все звуки, которыми приложение может проигрывать партитуры, в порядке,
+    заданном в админке.
+
+    `downloadUrl` — абсолютная ссылка на `.sf2`/`.sf3`: скачайте по выбору
+    пользователя и сохраните локально. `previewUrl` — короткий фрагмент, чтобы
+    послушать до скачивания (может быть null). `localization` — переводы
+    названия `{ "en": "Grand Piano", "ru": "Рояль", … }`; ключ `en` есть всегда,
+    если нужного языка нет — показывайте `en`.
+
+    Ссылка на файл меняется только при загрузке нового `.sf2`, поэтому её можно
+    использовать как ключ кэша: другая ссылка — пора перекачать."""
+    rows = db.execute(
+        select(SoundFont).order_by(SoundFont.position, SoundFont.name, SoundFont.id)
+    ).scalars().all()
+    return [
+        SoundFontOut(
+            id=r.id,
+            name=r.name,
+            preview_url=file_public_url(r.preview),
+            download_url=file_public_url(r.file),
+            localization=r.localization or {},
+        )
+        for r in rows
+    ]
 
 
 @router.get(
@@ -203,12 +249,34 @@ def list_popular_instruments(
     ]
 
 
-@router.get("/authors", response_model=list[AuthorOut], summary="Список авторов")
-def list_authors(db: Session = Depends(get_db)) -> list[AuthorOut]:
+@router.get("/authors", response_model=list[AuthorListItem], summary="Список авторов")
+def list_authors(db: Session = Depends(get_db)) -> list[AuthorListItem]:
     """Все авторы с фото и годами жизни. `slug` → фильтр `?author=<slug>`;
-    `photoUrl` — абсолютная ссылка на портрет (может быть null)."""
-    rows = db.execute(select(Author).order_by(Author.name)).scalars().all()
-    return [_author_out(r) for r in rows]
+    `photoUrl` — абсолютная ссылка на портрет (может быть null).
+
+    `scoresCount` — число опубликованных партитур автора; совпадает с `total`
+    из `GET /catalog/scores?author=<slug>`. Авторы без партитур тоже
+    возвращаются, у них `scoresCount = 0`."""
+    # Считаем в подзапросе и цепляем LEFT JOIN'ом, чтобы авторы без
+    # опубликованных нот не выпали из списка.
+    counts = (
+        select(Score.author_id, func.count(Score.id).label("scores_count"))
+        .where(Score.is_published.is_(True))
+        .group_by(Score.author_id)
+        .subquery()
+    )
+    rows = db.execute(
+        select(Author, func.coalesce(counts.c.scores_count, 0))
+        .outerjoin(counts, counts.c.author_id == Author.id)
+        .order_by(Author.name)
+    ).all()
+    return [
+        AuthorListItem(
+            **_author_out(author).model_dump(by_alias=False),
+            scores_count=count,
+        )
+        for author, count in rows
+    ]
 
 
 @router.get(

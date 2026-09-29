@@ -60,7 +60,14 @@ docker compose up -d --build
   Тонкая настройка порядка (`position`) — во вьюхе «Состав подборок». В API подборка
   читается через упорядоченное `items`.
 - Справочники: **Author**, **Genre**, **Style**, **Instrument** (`icon` загружается
-  в админке и возвращается в API как `iconUrl`).
+  в админке и возвращается в API как `iconUrl`; `localization` — переводы названия,
+  в админке таблицей «язык → перевод», `en` по умолчанию равен `name`).
+- **SoundFont** (раздел «Звуки (sf2)») — звуки, которыми приложение проигрывает
+  партитуры: `file` (.sf2/.sf3, обязателен, в API `downloadUrl`), `preview`
+  (короткий фрагмент послушать, `previewUrl`), `localization` как у инструментов,
+  `position` — порядок в списке. Файлы качаются приложением по выбору пользователя,
+  а не зашиты в сборку. Ссылка на файл меняется только при загрузке нового файла —
+  админка не пересохраняет неизменённые файлы (это касается всех разделов с файлами).
 - Активность: **AppUser** (по заголовку `X-Device-Id`), **Rating** (1..5,
   unique на пользователя+ноту), **PlayEvent**.
 
@@ -71,7 +78,8 @@ docker compose up -d --build
 
 | Метод | Путь | Описание |
 |---|---|---|
-| GET | `/catalog/genres` `/styles` `/instruments` `/authors` | справочники |
+| GET | `/catalog/genres` `/styles` `/instruments` `/authors` | справочники; у инструментов `localization` `{ "en": …, "ru": … }`, у авторов `scoresCount` |
+| GET | `/catalog/soundfonts` | звуки воспроизведения: массив `{ id, name, previewUrl, downloadUrl, localization }` в порядке `position` |
 | GET | `/catalog/collections?featured=true&has_cover=true&page=1&page_size=20` | подборки с фильтрами и пагинацией |
 | GET | `/catalog/collections/{id}?page=1&page_size=20` | подборка с нотами и пагинацией |
 | GET | `/catalog/scores` | каталог: `q, genre, style, instrument, author, collection, difficulty(1\|2\|3), sort(new\|popular\|rating), page, page_size` |

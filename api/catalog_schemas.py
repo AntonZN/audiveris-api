@@ -18,6 +18,12 @@ class AuthorOut(ApiModel):
     died: str | None = None
 
 
+class AuthorListItem(AuthorOut):
+    """Автор и число его опубликованных партитур."""
+
+    scores_count: int
+
+
 class TermOut(ApiModel):
     """Справочный термин (жанр / стиль)."""
 
@@ -30,6 +36,22 @@ class InstrumentOut(TermOut):
     """Инструмент с опциональной публичной ссылкой на иконку."""
 
     icon_url: str | None = None
+
+
+class InstrumentListItem(InstrumentOut):
+    """Инструмент с переводами названия."""
+
+    localization: dict[str, str] = Field(default_factory=dict)
+
+
+class SoundFontOut(ApiModel):
+    """Звук воспроизведения: `.sf2` для скачивания и превью, как он звучит."""
+
+    id: int
+    name: str
+    preview_url: str | None = None
+    download_url: str
+    localization: dict[str, str] = Field(default_factory=dict)
 
 
 class PopularInstrumentOut(InstrumentOut):
