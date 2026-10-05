@@ -352,7 +352,8 @@ def list_collections(
     total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
 
     stmt = (
-        stmt.order_by(Collection.position, Collection.created_at.desc())
+        # id — для стабильной пагинации, см. комментарий у _SORTS.
+        stmt.order_by(Collection.position, Collection.created_at.desc(), Collection.id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
@@ -473,10 +474,15 @@ def get_collection(
 # --------------------------------------------------------------------------- #
 # Ноты: список с фильтрами/поиском/сортировкой
 # --------------------------------------------------------------------------- #
+# Каждая сортировка заканчивается уникальным `id`. Без него строки с равным
+# ключом Postgres упорядочивает как попало и по-разному для каждого OFFSET:
+# страницы пересекаются, а часть нот не попадает ни на одну. Равные ключи —
+# норма: импорт пишет пачку нот одной транзакцией, и `now()` даёт им один
+# `created_at`.
 _SORTS = {
-    "new": (Score.created_at.desc(),),
-    "popular": (Score.plays_count.desc(), Score.created_at.desc()),
-    "rating": (Score.rating_avg.desc(), Score.rating_count.desc()),
+    "new": (Score.created_at.desc(), Score.id.desc()),
+    "popular": (Score.plays_count.desc(), Score.created_at.desc(), Score.id.desc()),
+    "rating": (Score.rating_avg.desc(), Score.rating_count.desc(), Score.id.desc()),
 }
 
 
