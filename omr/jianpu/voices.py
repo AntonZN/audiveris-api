@@ -122,7 +122,9 @@ def _verticals(ink: np.ndarray, text: float) -> list[Vertical]:
     if segments is None:
         return []
     found = []
-    for x1, y1, x2, y2 in segments[:, 0].astype(int):
+    # OpenCV 4 отдаёт (N, 1, 4), OpenCV 5 — (N, 4): с `segments[:, 0]` на пятой
+    # вместо отрезков шёл столбец x1, и цзянпу падало на любом снимке.
+    for x1, y1, x2, y2 in segments.reshape(-1, 4).astype(int):
         rise = abs(y2 - y1)
         # Допуск на наклон — фото держатся в пределах пары градусов.
         if rise and abs(x2 - x1) <= 0.08 * rise:

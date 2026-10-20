@@ -272,6 +272,19 @@ class VoicesTest(unittest.TestCase):
         page[200:900, :16] = 0
         self.assertFalse(voices.detect(page).multi)
 
+    def test_opencv5_segment_shape(self) -> None:
+        """OpenCV 5 отдаёт отрезки Хафа как (N, 4), а не (N, 1, 4): на проде так падало всё цзянпу."""
+        hough = cv2.HoughLinesP
+
+        def flat(*args, **kwargs):
+            segments = hough(*args, **kwargs)
+            return None if segments is None else segments.reshape(-1, 4)
+
+        with mock.patch.object(voices.cv2, "HoughLinesP", flat):
+            report = voices.detect(_choir_page())
+        self.assertTrue(report.multi)
+        self.assertEqual(len(report.brackets), 2)
+
 
 @unittest.skipIf(cv2 is None, "нужен OpenCV")
 class TempoTest(unittest.TestCase):

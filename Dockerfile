@@ -79,7 +79,17 @@ RUN python3 -m venv "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 COPY api/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+# rapidocr-onnxruntime (зависимость homr) тянет незакреплённый opencv-python, и
+# он пишет в тот же каталог cv2 поверх закреплённого headless. С выходом 5.0
+# весь OMR молча поехал на OpenCV 5, а цзянпу падало на каждом снимке:
+# HoughLinesP там отдаёт (N, 4) вместо (N, 1, 4). Снимаем его и переставляем
+# headless (каталог общий — после удаления он битый); сборка падает, если cv2
+# всё равно не тот.
+RUN pip install --no-cache-dir -r /tmp/requirements.txt \
+ && pip uninstall -y opencv-python \
+ && pip install --no-cache-dir --no-deps --force-reinstall \
+      "$(grep -o '^opencv-python-headless==[0-9.]*' /tmp/requirements.txt)" \
+ && python -c "import cv2, re, sys; pin = re.search(r'^opencv-python-headless==([0-9.]+)', open('/tmp/requirements.txt').read(), re.M)[1]; sys.exit(None if pin.startswith(cv2.__version__ + '.') else f'cv2 {cv2.__version__}, а закреплён {pin}')"
 
 # Запекаем ONNX-модели homr (сегментация + трансформер + OCR заголовков) в образ,
 # чтобы первый запрос не качал их в рантайме.
