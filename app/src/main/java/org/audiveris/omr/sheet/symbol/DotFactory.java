@@ -46,6 +46,7 @@ import org.audiveris.omr.sig.inter.Inter;
 import org.audiveris.omr.sig.inter.Inters;
 import org.audiveris.omr.sig.inter.LedgerInter;
 import org.audiveris.omr.sig.inter.RepeatDotInter;
+import org.audiveris.omr.sig.inter.SmallChordInter;
 import org.audiveris.omr.sig.inter.StaffBarlineInter;
 import org.audiveris.omr.sig.relation.AugmentationRelation;
 import org.audiveris.omr.sig.relation.Link;
@@ -624,6 +625,14 @@ public class DotFactory
 
         final double grade = Grades.intrinsicRatio * dot.getGrade();
         final Glyph glyph = dot.getGlyph();
+
+        // A dot lying within a grace chord is what is left of its slash once the head is erased
+        for (Inter small : sig.inters(SmallChordInter.class)) {
+            if (small.getBounds().contains(glyph.getBounds())) {
+                return;
+            }
+        }
+
         final AugmentationDotInter aug = new AugmentationDotInter(glyph, grade);
 
         final List<Link> links = new ArrayList<>();
