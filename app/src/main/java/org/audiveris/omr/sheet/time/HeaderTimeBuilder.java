@@ -25,16 +25,11 @@ import org.audiveris.omr.classifier.Evaluation;
 import org.audiveris.omr.classifier.ShapeClassifier;
 import org.audiveris.omr.glyph.Glyph;
 import org.audiveris.omr.glyph.GlyphCluster;
-import org.audiveris.omr.glyph.GlyphFactory;
-import org.audiveris.omr.glyph.GlyphIndex;
 import org.audiveris.omr.glyph.Glyphs;
 import org.audiveris.omr.glyph.Grades;
 import org.audiveris.omr.glyph.Shape;
 import org.audiveris.omr.math.GeoOrder;
 import org.audiveris.omr.math.IntegerFunction;
-import org.audiveris.omr.run.Orientation;
-import org.audiveris.omr.run.RunTable;
-import org.audiveris.omr.run.RunTableFactory;
 import org.audiveris.omr.sheet.Picture;
 import org.audiveris.omr.sheet.Sheet;
 import org.audiveris.omr.sheet.Staff;
@@ -45,7 +40,6 @@ import static org.audiveris.omr.sheet.time.TimeBuilder.TimeKind.WHOLE;
 import org.audiveris.omr.sig.inter.AbstractTimeInter;
 import org.audiveris.omr.sig.inter.Inter;
 import org.audiveris.omr.sig.inter.Inters;
-import org.audiveris.omr.sig.inter.TimeNumberInter;
 import org.audiveris.omr.sig.inter.TimeWholeInter;
 import org.audiveris.omr.util.ChartPlotter;
 
@@ -54,7 +48,6 @@ import org.slf4j.LoggerFactory;
 
 import org.jfree.data.xy.XYSeries;
 
-import ij.process.Blitter;
 import ij.process.ByteProcessor;
 
 import java.awt.Color;
@@ -62,7 +55,6 @@ import java.awt.Rectangle;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
-import java.util.ListIterator;
 import java.util.Map;
 import java.util.Set;
 
@@ -249,41 +241,6 @@ public class HeaderTimeBuilder
         }
     }
 
-    //----------//
-    // getParts //
-    //----------//
-    /**
-     * Retrieve all glyph instances that could be part of time sig.
-     *
-     * @return time sig possible parts
-     */
-    private List<Glyph> getParts (Rectangle rect)
-    {
-        final Sheet sheet = system.getSheet();
-
-        // Grab pixels out of staff-free source
-        ByteProcessor source = sheet.getPicture().getSource(Picture.SourceKey.NO_STAFF);
-        ByteProcessor buf = new ByteProcessor(rect.width, rect.height);
-        buf.copyBits(source, -rect.x, -rect.y, Blitter.COPY);
-
-        // Extract parts
-        RunTable runTable = new RunTableFactory(Orientation.VERTICAL).createTable(buf);
-        List<Glyph> parts = GlyphFactory.buildGlyphs(runTable, rect.getLocation());
-
-        // Keep only interesting parts
-        purgeParts(parts, rect);
-
-        final GlyphIndex glyphIndex = sheet.getGlyphIndex();
-
-        for (ListIterator<Glyph> li = parts.listIterator(); li.hasNext();) {
-            final Glyph part = li.next();
-            Glyph glyph = glyphIndex.registerOriginal(part);
-            li.set(glyph);
-        }
-
-        return parts;
-    }
-
     //---------------//
     // getProjection //
     //---------------//
@@ -417,40 +374,13 @@ public class HeaderTimeBuilder
      */
     private void processHalf (TimeKind half)
     {
-        final List<Inter> inters = (half == NUM) ? nums : dens;
-
         // Define proper rectangular search area for this side
         int top = roi.y + ((half == NUM) ? 0 : (roi.height - (roi.height / 2)));
         Rectangle rect = new Rectangle(range.getStart(), top, range.getWidth(), roi.height / 2);
         rect.grow(0, -params.yMargin);
         staff.addAttachment("T" + ((half == NUM) ? "N" : "D"), rect);
 
-        //TODO: Should not try each and every combination of parts
-        // Perhaps take all of them (or the largest ones?) and evaluate the compound
-        List<Glyph> parts = getParts(rect);
-        HalfAdapter adapter = new HalfAdapter(half, parts);
-        adapters.put(half, adapter);
-        new GlyphCluster(adapter, null).decompose();
-        logger.debug(
-                "Staff#{} {} {} trials:{}",
-                staff.getId(),
-                half,
-                Glyphs.ids("parts", parts),
-                adapter.trials);
-
-        if (!adapter.bestMap.isEmpty()) {
-            for (Map.Entry<Shape, Inter> entry : adapter.bestMap.entrySet()) {
-                Inter inter = entry.getValue();
-                Rectangle timeBox = inter.getSymbolBounds(staff.getSpecificInterline());
-                inter.setBounds(timeBox);
-                inter.setStaff(staff);
-                sig.addVertex(inter);
-                inters.add(inter);
-
-                int gid = inter.getGlyph().getId();
-                logger.debug("Staff#{} {} {} g#{} {}", staff.getId(), half, inter, gid, timeBox);
-            }
-        }
+        adapters.put(half, lookupHalf(half, rect));
     }
 
     //--------------//
@@ -492,104 +422,7 @@ public class HeaderTimeBuilder
         }
     }
 
-    //------------//
-    // purgeParts //
-    //------------//
-    /**
-     * Purge the population of parts candidates as much as possible, since the cost
-     * of their later combinations is worse than exponential.
-     *
-     * @param parts the collection to purge
-     * @param rect  the slice rectangle
-     */
-    private void purgeParts (List<Glyph> parts,
-                             Rectangle rect)
-    {
-        //        // The rect is used for cropping only.
-        //        // Use a smaller core rectangle which must be intersected by any part candidate
-        //        Rectangle core = new Rectangle(rect);
-        //        core.grow(-params.xCoreMargin, -params.yCoreMargin);
-        //        staff.addAttachment("c", core);
-        List<Glyph> toRemove = new ArrayList<>();
-
-        for (Glyph part : parts) {
-            ///if ((part.getWeight() < params.minPartWeight) || !part.getBounds().intersects(core)) {
-            if (part.getWeight() < params.minPartWeight) {
-                toRemove.add(part);
-            }
-        }
-
-        if (!toRemove.isEmpty()) {
-            parts.removeAll(toRemove);
-        }
-    }
-
     //~ Inner Classes ------------------------------------------------------------------------------
-
-    //-------------//
-    // HalfAdapter //
-    //-------------//
-    /**
-     * Handles the integration between glyph clustering class and time-sig environment.
-     * <p>
-     * For each time kind, we keep the best result found if any.
-     */
-    private class HalfAdapter
-            extends TimeAdapter
-    {
-        /** Which half is being searched. (NUM or DEN) */
-        private final TimeKind half;
-
-        public HalfAdapter (TimeKind half,
-                            List<Glyph> parts)
-        {
-            super(parts);
-            this.half = half;
-        }
-
-        @Override
-        public void evaluateGlyph (Glyph glyph,
-                                   Set<Glyph> parts)
-        {
-            trials++;
-
-            if (glyph.getId() == 0) {
-                glyph = system.registerGlyph(glyph, null);
-            }
-
-            Evaluation[] evals = ShapeClassifier.getInstance().evaluate(
-                    glyph,
-                    staff.getSpecificInterline(),
-                    params.maxEvalRank,
-                    Grades.timeMinGrade / Grades.intrinsicRatio,
-                    null);
-
-            for (Evaluation eval : evals) {
-                final Shape shape = eval.shape;
-
-                if (halfShapes.contains(shape)) {
-                    final double grade = Grades.intrinsicRatio * eval.grade;
-                    logger.debug("   {} eval {} for glyph#{}", half, eval, glyph.getId());
-
-                    Inter bestInter = bestMap.get(shape);
-
-                    if ((bestInter == null) || (bestInter.getGrade() < grade)) {
-                        TimeNumberInter inter = TimeNumberInter.create(glyph, shape, grade, staff);
-
-                        if (inter != null) {
-                            bestMap.put(shape, inter);
-                        }
-                    }
-                }
-            }
-        }
-
-        @Override
-        public boolean isTooLight (int weight)
-        {
-            return weight < params.minHalfTimeWeight;
-        }
-    }
 
     //-------//
     // Space //
@@ -617,45 +450,6 @@ public class HeaderTimeBuilder
             sb.append("Space(").append(start).append("-").append(stop).append(")");
 
             return sb.toString();
-        }
-    }
-
-    //-------------//
-    // TimeAdapter //
-    //-------------//
-    private abstract class TimeAdapter
-            extends GlyphCluster.AbstractAdapter
-    {
-        /** Best inter per time shape. */
-        public Map<Shape, Inter> bestMap = new EnumMap<>(Shape.class);
-
-        public TimeAdapter (List<Glyph> parts)
-        {
-            super(parts, params.maxPartGap);
-        }
-
-        public void cleanup ()
-        {
-            for (Inter inter : bestMap.values()) {
-                inter.remove();
-            }
-        }
-
-        public Inter getSingleInter ()
-        {
-            for (Inter inter : bestMap.values()) {
-                if (!inter.isRemoved()) {
-                    return inter;
-                }
-            }
-
-            return null;
-        }
-
-        @Override
-        public boolean isTooLarge (Rectangle bounds)
-        {
-            return bounds.width > params.maxTimeWidth;
         }
     }
 

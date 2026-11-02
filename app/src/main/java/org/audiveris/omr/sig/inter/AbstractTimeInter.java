@@ -85,7 +85,7 @@ public abstract class AbstractTimeInter
                     new TimeRational(4, 4), // Duple simple
                     new TimeRational(5, 4), // Asymmetrical simple
                     new TimeRational(6, 4), // ?
-                    ///new TimeRational(7, 4), // Asymmetrical simple
+                    new TimeRational(7, 4), // Asymmetrical simple
                     new TimeRational(3, 8), // Triple compound
                     new TimeRational(6, 8), // Duple compound
                     new TimeRational(9, 8), // Triple compound

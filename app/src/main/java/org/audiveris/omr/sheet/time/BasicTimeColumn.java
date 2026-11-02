@@ -59,6 +59,24 @@ public class BasicTimeColumn
         }
     }
 
+    //--------------//
+    // retrieveTime //
+    //--------------//
+    @Override
+    public int retrieveTime ()
+    {
+        final int res = super.retrieveTime();
+
+        if (res == -1) {
+            // Numbers looked up within combo candidates are not part of time set
+            for (TimeBuilder builder : builders.values()) {
+                ((BasicTimeBuilder) builder).removeHalves();
+            }
+        }
+
+        return res;
+    }
+
     //----------------//
     // purgeUnaligned //
     //----------------//
