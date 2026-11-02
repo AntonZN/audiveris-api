@@ -784,14 +784,35 @@ class AudiverisService:
             cmd,
             output_dir,
             timeout_seconds=timeout_seconds or self._timeout_for_single(),
+            book=output_dir / f"{input_path.stem}.omr",
         )
 
+    # Так Audiveris помечает лист, где не нашёл ни одной системы: обложку, колофон.
+    _EMPTY_SHEET = "flagged as invalid"
+
     def _execute_and_process(
-            self, cmd: list[str], output_dir: Path, timeout_seconds: int
+            self, cmd: list[str], output_dir: Path, timeout_seconds: int,
+            book: Path | None = None,
     ) -> tuple[Path, Path, int | None]:
-        """Execute audiveris command and process results."""
+        """Execute audiveris command and process results.
+
+        Лист без нот роняет всю книгу: CLI не доходит до экспорта, хотя остальные
+        листы разобраны (Count-Down: обложка, 3 листа нот — ни одного MusicXML).
+        Книга при этом сохранена (`book`), а пустой лист в ней помечен — повтор по
+        книге берёт только валидные листы и разобранное не пересчитывает: 2 c вместо
+        57. Повторяем, только если Audiveris сам пометил лист пустым: падение на TAB
+        листов не помечает, его лечит повтор без oneLineStaves (`_drum_attempts`).
+        """
+        started_at = time.monotonic()
         result = self._run_command(cmd, output_dir, timeout_seconds)
         self._log_command_result(cmd, output_dir, result, timeout_seconds)
+        if (result.returncode != 0 and book is not None and book.exists()
+                and self._EMPTY_SHEET in (result.stdout or "")):
+            logger.warning("Audiveris: в %s есть лист без нот — экспортируем остальные", book.name)
+            cmd = [*cmd[:-1], str(book)]
+            remaining = self._remaining_timeout(started_at, timeout_seconds)
+            result = self._run_command(cmd, output_dir, remaining)
+            self._log_command_result(cmd, output_dir, result, remaining)
         log_path = self._write_log(output_dir, cmd, result)
         book_log = self._find_audiveris_log(output_dir, log_path)
         interline_value = self._detect_interline(book_log)
@@ -920,6 +941,7 @@ class AudiverisService:
             cmd_export,
             output_dir,
             timeout_seconds=self._remaining_timeout(started_at, total_timeout),
+            book=compound_omr,
         )
 
     def _write_log(

@@ -12,6 +12,7 @@ homr ударных не знает (перкуссионный ключ чит�
 from __future__ import annotations
 
 import re
+import subprocess
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -367,6 +368,52 @@ class DrumRoutingTest(unittest.TestCase):
 
         audiveris.assert_not_called()
         self.assertIn("не читает формат", result.error or "")
+
+
+class EmptySheetTest(unittest.TestCase):
+    """Обложка без нот роняет всю книгу Audiveris; разобранные листы экспортируем повтором."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.out = Path(self._tmp.name)
+        self.book = self.out / "score.omr"
+        self.cmd = ["audiveris", "-batch", "-transcribe", "-export", "-output", str(self.out),
+                    str(self.out / "in" / "score.pdf")]
+        self.service = services.AudiverisService()
+
+    def _audiveris(self, first_stdout: str):
+        def run(cmd, output_dir, timeout):
+            if cmd[-1] == str(self.book):
+                (self.out / "score.mxl").write_bytes(b"PK")
+                return subprocess.CompletedProcess(cmd, 0, "exported", "")
+            self.book.write_bytes(b"PK")
+            return subprocess.CompletedProcess(cmd, 1, first_stdout, "")
+        return mock.patch.object(self.service, "_run_command", side_effect=run)
+
+    def test_book_is_exported_without_the_empty_sheet(self) -> None:
+        stdout = "INFO Sheet score#1 flagged as invalid.\nWARN Exception on score, Error in reaching step PAGE"
+        with self._audiveris(stdout) as run:
+            output, _, _ = self.service._execute_and_process(self.cmd, self.out, 120, book=self.book)
+
+        self.assertEqual(output, self.out / "score.mxl")
+        self.assertEqual([call.args[0][-1] for call in run.call_args_list],
+                         [self.cmd[-1], str(self.book)])
+        self.assertEqual(run.call_args_list[1].args[0][:-1], self.cmd[:-1])
+
+    def test_crash_without_empty_sheet_is_not_repeated(self) -> None:
+        """TAB-падение листов не помечает — его лечит повтор без oneLineStaves."""
+        with self._audiveris("WARN Error processing stub java.lang.NegativeArraySizeException") as run:
+            with self.assertRaises(ProcessingError):
+                self.service._execute_and_process(self.cmd, self.out, 120, book=self.book)
+
+        run.assert_called_once()
+
+    def test_single_drum_run_points_at_its_book(self) -> None:
+        with mock.patch.object(self.service, "_execute_and_process",
+                               return_value=(self.out / "score.mxl", None, None)) as run:
+            self.service._run_audiveris(self.out / "in" / "score.png", self.out, "drums")
+        self.assertEqual(run.call_args.kwargs["book"], self.out / "score.omr")
 
 
 def _drum_set() -> dict[tuple[int, int, str], str]:
