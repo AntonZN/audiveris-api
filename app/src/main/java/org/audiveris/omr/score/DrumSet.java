@@ -500,6 +500,19 @@ public class DrumSet
         {
             return midi;
         }
+
+        /**
+         * Report the value for MusicXML 'midi-unpitched' element.
+         * <p>
+         * This element counts from 1, while GM percussion keys count from 0:
+         * Bass_Drum_1 (key 36) is written as 37.
+         *
+         * @return the 1-based MIDI key
+         */
+        public int getMidiUnpitched ()
+        {
+            return midi + 1;
+        }
     }
 
     //---------------//

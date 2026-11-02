@@ -844,7 +844,9 @@ public class ScaleBuilder
                 final Range p0 = blackPeaks.get(0);
                 final Range p1 = blackPeaks.get(1);
                 final double maxLineRatio = constants.maxLineRatio.getValue();
-                final int maxLineKey = (int) Math.rint(comboPeak.main * maxLineRatio);
+                // With a user-specified interline, comboPeak is not retrieved (null)
+                final int interline = (interlineKey != null) ? interlineKey : comboPeak.main;
+                final int maxLineKey = (int) Math.rint(interline * maxLineRatio);
 
                 if (p1.main <= maxLineKey) {
                     // Double line peak

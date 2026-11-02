@@ -2,14 +2,17 @@
 
 homr ударных не знает (перкуссионный ключ читает как альтовый, крестики теряет),
 поэтому `drums`/`drums_1line` идут прямо в Audiveris. Сторожится: маршрут, отказ
-от отката на homr, лесенка интервалов для однолинейного стана и сама оценка
-интервала по головкам.
+от отката на homr, лесенка интервалов для однолинейного стана, сама оценка
+интервала по головкам, карта ударных форка (app/res/drum-set.xml) и ключи станов
+в пресетах.
 """
 
 from __future__ import annotations
 
+import re
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
@@ -18,6 +21,11 @@ import numpy as np
 from api import drums, omr_bridge, services
 from api.exceptions import ProcessingError
 from api.models import FileResult
+from api.presets import Preset, get_preset_args
+
+REPO = Path(__file__).resolve().parents[1]
+DRUM_SET = REPO / "app" / "res" / "drum-set.xml"
+DRUM_SOUNDS = REPO / "app" / "src" / "main" / "java" / "org" / "audiveris" / "omr" / "score" / "DrumSet.java"
 
 try:
     import cv2
@@ -143,6 +151,65 @@ class DrumRoutingTest(unittest.TestCase):
 
         audiveris.assert_not_called()
         self.assertIn("не читает формат", result.error or "")
+
+
+def _drum_set() -> dict[tuple[int, int, str], str]:
+    """(линий в стане, позиция, головка) → звук. Записи со знаком исполнения не нужны."""
+    root = ET.parse(DRUM_SET).getroot()
+    return {
+        (int(staff.get("line-count")), int(entry.get("pitch-position")), entry.get("motif")):
+            entry.get("sound")
+        for staff in root.findall("staff")
+        for entry in staff.findall("entry")
+        if entry.get("sign") is None
+    }
+
+
+class DrumSetMapTest(unittest.TestCase):
+    """Карта ударных Audiveris: где искать головки и каким звуком их экспортировать.
+
+    NoteHeadsBuilder на драм-стане ищет только формы, перечисленные для позиции, а
+    позицию без записи пропускает целиком: бочка на D4 (+5) читалась крестом или
+    терялась. Замер на tests/images/drum/pdmx (omr/drumcheck.py): American Idiot
+    72 → 99%, Stinkfist 59 → 80%.
+    """
+
+    def setUp(self) -> None:
+        self.entries = _drum_set()
+
+    def test_sounds_are_known_to_audiveris(self) -> None:
+        """Опечатка в имени звука не ошибка: загрузчик молча делает из записи удаление."""
+        known = set(re.findall(r"^\s+([A-Z][A-Za-z0-9_]*)\(\d+\)[,;]", DRUM_SOUNDS.read_text(), re.M))
+        self.assertIn("Acoustic_Snare", known)
+        self.assertEqual(set(self.entries.values()) - known, set())
+
+    def test_head_on_single_line_is_snare(self) -> None:
+        """Hand_Clap (GM 39) звучал малым только из-за ошибки на единицу в midi-unpitched."""
+        self.assertEqual(self.entries[(1, 0, "oval")], "Acoustic_Snare")
+        self.assertEqual(self.entries[(1, 0, "cross")], "Side_Stick")
+
+    def test_heads_just_outside_staff_are_searched(self) -> None:
+        self.assertEqual(self.entries[(5, 5, "oval")], "Acoustic_Bass_Drum")
+        self.assertIn((5, -5, "oval"), self.entries)
+
+    def test_small_head_has_the_oval_sound(self) -> None:
+        """PartwiseBuilder ищет звук малой головки как у овала на той же позиции."""
+        for (lines, pitch, motif), sound in self.entries.items():
+            if motif == "small":
+                with self.subTest(lines=lines, pitch=pitch):
+                    self.assertEqual(self.entries.get((lines, pitch, "oval")), sound)
+
+
+class DrumPresetStavesTest(unittest.TestCase):
+    def test_drums_reads_one_line_staves_beside_five_line(self) -> None:
+        """Установка + однолинейная перкуссия на одной странице (Little Drummer Boy)."""
+        args = get_preset_args(Preset.drums)
+        self.assertIn("org.audiveris.omr.sheet.ProcessingSwitches.oneLineStaves=true", args)
+        self.assertNotIn("org.audiveris.omr.sheet.ProcessingSwitches.fiveLineStaves=false", args)
+
+    def test_only_drums_1line_switches_five_line_staves_off(self) -> None:
+        args = get_preset_args(Preset.drums_1line)
+        self.assertIn("org.audiveris.omr.sheet.ProcessingSwitches.fiveLineStaves=false", args)
 
 
 if __name__ == "__main__":  # pragma: no cover

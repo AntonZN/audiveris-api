@@ -39,6 +39,14 @@ PRESET_CONSTANTS: dict[Preset, list[str]] = {
         # на tests/images/drum.
         f"{_FONT_PREFIX}.defaultMusicFamily=Leland",
         f"{_PREFIX}.drumNotation=true",
+        # Однолинейные станы рядом с пятилинейными (установка + перкуссия на одной
+        # странице): без ключа Audiveris их не видит, и эти партии пропадают.
+        # Little Drummer Boy из tests/images/drum/pdmx: 70 → 92%. Пятилинейные
+        # остаются включены — выключает их только drums_1line.
+        # Известная регрессия: если на листе есть TAB, Audiveris с этим ключом
+        # падает (NegativeArraySizeException, mix-under-the-bridge) — такой файл
+        # надо повторять без ключа.
+        f"{_PREFIX}.oneLineStaves=true",
         f"{_PREFIX}.crossHeads=true",
     ],
 

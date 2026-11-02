@@ -44,37 +44,57 @@
 
 <drum-set>
     
+  <!--
+      Heads are searched only for the motifs listed at their pitch-position (see NoteHeadsBuilder):
+      a head with no entry is not found at all.
+      Hence the 'small' entries, which let grace notes be found when smallHeads is set.
+      At export, a small head takes the sound of the oval head at the same position.
+  -->
+    
   <staff line-count="1">
       
     <!-- -1 -->
     <entry pitch-position="-1" motif="oval"  sound="Hi_Bongo"/>
+    <entry pitch-position="-1" motif="small" sound="Hi_Bongo"/>
     <entry pitch-position="-1" motif="cross" sound="Maracas"/> <!-- Surely wrong... -->
     
     <!-- 0 -->
-    <entry pitch-position="0"  motif="oval"  sound="Hand_Clap"/>
+    <!-- A plain head on the line is a snare (not Hand_Clap), a cross head is a rim click -->
+    <entry pitch-position="0"  motif="oval"  sound="Acoustic_Snare"/>
+    <entry pitch-position="0"  motif="small" sound="Acoustic_Snare"/>
+    <entry pitch-position="0"  motif="cross" sound="Side_Stick"/>
     
     <!-- 1 -->
     <entry pitch-position="1"  motif="oval"  sound="Low_Bongo"/>
+    <entry pitch-position="1"  motif="small" sound="Low_Bongo"/>
     <entry pitch-position="1"  motif="cross" sound="Cowbell"/>
     
   </staff>
   
   <staff line-count="5">
         
+    <!-- -9 -->
+    <entry pitch-position="-9" motif="cross"   sound="Crash_Cymbal_2"/>
+        
     <!-- -8 -->
+    <entry pitch-position="-8" motif="oval"    sound="High_Tom"/>
     <entry pitch-position="-8" motif="cross"   sound="Splash_Cymbal"/>
     <entry pitch-position="-8" motif="circle"  sound="Chinese_Cymbal"/>
     
     <!-- -7 -->
+    <entry pitch-position="-7" motif="oval"    sound="High_Tom"/>
     <entry pitch-position="-7" motif="cross"   sound="Crash_Cymbal_2"/>
     <entry pitch-position="-7" motif="circle"  sound="Crash_Cymbal_2"/>
     
     <!-- -6 -->
+    <entry pitch-position="-6" motif="oval"    sound="High_Tom"/>
     <entry pitch-position="-6" motif="cross"   sound="Crash_Cymbal_1"/>
     <entry pitch-position="-6" motif="circle"  sound="Crash_Cymbal_1"/>
     <entry pitch-position="-6" motif="diamond" sound="Crash_Cymbal_1"/>
     
     <!-- -5 -->
+    <entry pitch-position="-5" motif="oval"                           sound="High_Tom"/>
+    <entry pitch-position="-5" motif="small"                          sound="High_Tom"/>
     <entry pitch-position="-5" motif="cross"    sign="PLAYING_OPEN"   sound="Open_Hi_Hat"/>
     <entry pitch-position="-5" motif="circle"                         sound="Open_Hi_Hat"/>
     <entry pitch-position="-5" motif="cross"    sign="PLAYING_CLOSED" sound="Closed_Hi_Hat"/>   
@@ -82,18 +102,21 @@
 
     <!-- -4 -->
     <entry pitch-position="-4" motif="oval"     sound="High_Tom"/>
+    <entry pitch-position="-4" motif="small"    sound="High_Tom"/>
     <entry pitch-position="-4" motif="cross"    sound="Ride_Cymbal_1"/>
     <entry pitch-position="-4" motif="circle"   sound="Ride_Cymbal_1"/>
     <entry pitch-position="-4" motif="diamond"  sound="Ride_Bell"/> <!-- Or Ride_Cymbal_1 or 2 -->
     
     <!-- -3 -->
     <entry pitch-position="-3" motif="oval"     sound="Hi_Mid_Tom"/>
+    <entry pitch-position="-3" motif="small"    sound="Hi_Mid_Tom"/>
     <entry pitch-position="-3" motif="cross"    sound="Open_Hi_Hat"/>
     <entry pitch-position="-3" motif="circle"   sound="Open_Hi_Hat"/>
     <entry pitch-position="-3" motif="triangle" sound="Cowbell"/>
     
     <!-- -2 -->
     <entry pitch-position="-2" motif="oval"     sound="Low_Mid_Tom"/>
+    <entry pitch-position="-2" motif="small"    sound="Low_Mid_Tom"/>
     <entry pitch-position="-2" motif="triangle" sound="Cowbell"/>
     <entry pitch-position="-2" motif="diamond"  sound="Tambourine"/>
     <entry pitch-position="-2" motif="cross"    sound="Ride_Cymbal_2"/>
@@ -107,27 +130,44 @@
     
     <!-- 0 -->
     <entry pitch-position="0" motif="oval"      sound="Low_Tom"/>
+    <entry pitch-position="0" motif="small"     sound="Low_Tom"/>
+    <entry pitch-position="0" motif="cross"     sound="Side_Stick"/>
     
     <!-- 1 -->
     <entry pitch-position="1" motif="oval"      sound="High_Floor_Tom"/>
+    <entry pitch-position="1" motif="small"     sound="High_Floor_Tom"/>
+    <entry pitch-position="1" motif="cross"     sound="Side_Stick"/>
     
     <!-- 2 -->
     <entry pitch-position="2" motif="oval"      sound="Low_Floor_Tom"/>
+    <entry pitch-position="2" motif="small"     sound="Low_Floor_Tom"/>
     <entry pitch-position="2" motif="cross"     sound="Low_Conga"/>
     <entry pitch-position="2" motif="circle"    sound="Low_Conga"/>
     
     <!-- 3 -->
-    <entry pitch-position="3" motif="oval"      sound="Bass_Drum_1"/>     
+    <entry pitch-position="3" motif="oval"      sound="Bass_Drum_1"/>
+    <entry pitch-position="3" motif="small"     sound="Bass_Drum_1"/>
+    <entry pitch-position="3" motif="cross"     sound="Pedal_Hi_Hat"/>
     
     <!-- 4 -->
     <entry pitch-position="4" motif="oval"      sound="Acoustic_Bass_Drum"/>
+    <entry pitch-position="4" motif="small"     sound="Acoustic_Bass_Drum"/>
     <entry pitch-position="4" motif="cross"     sound="Open_Hi_Conga"/>
     <entry pitch-position="4" motif="circle"    sound="Open_Hi_Conga"/>
     
     <!-- 5 -->
     <!-- w/ open sign -> foot splash -->
+    <entry pitch-position="5" motif="oval"      sound="Acoustic_Bass_Drum"/>
     <entry pitch-position="5" motif="cross"     sound="Pedal_Hi_Hat"/>
     <entry pitch-position="5" motif="circle"    sound="Open_Hi_Hat"/>
+    
+    <!-- 6 -->
+    <entry pitch-position="6" motif="oval"      sound="Acoustic_Bass_Drum"/>
+    <entry pitch-position="6" motif="cross"     sound="Pedal_Hi_Hat"/>
+    
+    <!-- 7 -->
+    <entry pitch-position="7" motif="oval"      sound="Acoustic_Bass_Drum"/>
+    <entry pitch-position="7" motif="cross"     sound="Pedal_Hi_Hat"/>
     
 <!--
     Here below is the list of not yet assigned sounds

@@ -158,9 +158,15 @@ curl -X POST \
 
 | Параметр | drums | drums_1line |
 |----------|-------|-------------|
-| Станы | 5-линейные | 1-линейные |
+| Станы | 5-линейные и 1-линейные рядом с ними | только 1-линейные |
 | fiveLineStaves | true | false |
-| oneLineStaves | false | true |
+| oneLineStaves | true | true |
+
+`oneLineStaves` в `drums` — ради страниц, где установка соседствует с
+однолинейной перкуссией: без него эти партии пропадали (Little Drummer Boy из
+`tests/images/drum/pdmx`: 70 → 92%). Известная регрессия: если на листе есть TAB,
+Audiveris с этим ключом падает (`NegativeArraySizeException`), такой файл надо
+повторять без ключа.
 
 ---
 

@@ -598,7 +598,7 @@ public class PartwiseBuilder
                 midiInstrument.setId(scoreInstrument);
                 midiInstrument.setMidiChannel(10); // in [1..16] range
                 midiInstrument.setMidiProgram(1);
-                midiInstrument.setMidiUnpitched(sound.getMidi());
+                midiInstrument.setMidiUnpitched(sound.getMidiUnpitched());
                 midiInstrument.setVolume(new BigDecimal(score.getVolume()));
             }
             current.instrumentMap = instrumentMap;
