@@ -91,6 +91,7 @@ import org.audiveris.omr.sig.relation.ChordArpeggiatoRelation;
 import org.audiveris.omr.sig.relation.ChordArticulationRelation;
 import org.audiveris.omr.sig.relation.ChordBowRelation;
 import org.audiveris.omr.sig.relation.ChordDynamicsRelation;
+import org.audiveris.omr.sig.relation.ChordGraceRelation;
 import org.audiveris.omr.sig.relation.ChordNameRelation;
 import org.audiveris.omr.sig.relation.ChordOrnamentRelation;
 import org.audiveris.omr.sig.relation.ChordPauseRelation;
@@ -244,6 +245,7 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -3656,15 +3658,29 @@ public class PartwiseBuilder
     //------------//
     /**
      * Helper class to keep track of a wedge event (start or stop) and its timing.
+     * <p>
+     * A wedge end may be linked to a chord with no time offset (a grace chord, or a small chord
+     * no standard chord claimed). When no time can be inferred, a start is placed at measure
+     * start and a stop at measure end, so that a stop still never precedes its start.
      */
-    private static class TimedWedge
+    static class TimedWedge
     {
+        /**
+         * Events by time offset, an unknown stop offset coming last,
+         * and for the same offset a start (LEFT) before a stop (RIGHT).
+         */
+        static final Comparator<TimedWedge> ORDER = Comparator.comparing(
+                (TimedWedge w) -> w.timeOffset,
+                Comparator.nullsLast(Comparator.naturalOrder())).thenComparingInt(
+                        w -> (w.side == LEFT) ? 0 : 1);
+
         final WedgeInter wedge;
 
         final HorizontalSide side;
 
         final AbstractNoteInter referenceNote;
 
+        /** Null only for a stop of unknown time. */
         final Rational timeOffset;
 
         TimedWedge (WedgeInter wedge,
@@ -3675,7 +3691,18 @@ public class PartwiseBuilder
             this.wedge = wedge;
             this.side = side;
             this.referenceNote = referenceNote;
-            this.timeOffset = timeOffset;
+            this.timeOffset = (timeOffset == null && side == LEFT) ? Rational.ZERO : timeOffset;
+        }
+
+        /**
+         * Report whether this event is due at the provided time offset.
+         *
+         * @param now current time offset in measure
+         * @return true if event occurs at or before 'now'
+         */
+        boolean isDueAt (Rational now)
+        {
+            return (timeOffset != null) && (timeOffset.compareTo(now) <= 0);
         }
     }
 
@@ -3709,27 +3736,44 @@ public class PartwiseBuilder
                     if ((chord != null) && (chord.getMeasure() == measure)) {
                         // We take the first note of the chord as reference
                         AbstractNoteInter refNote = (AbstractNoteInter) chord.getNotes().get(0);
-                        events.add(new TimedWedge(wedge, side, refNote, chord.getTimeOffset()));
+                        events.add(new TimedWedge(wedge, side, refNote, timeOffsetOf(chord)));
                     }
                 }
             }
 
             // Sort by time offset, and for same offset, ensure START (LEFT) comes before STOP (RIGHT)
-            Collections.sort(
-                    events,
-                    (w1,
-                     w2) -> {
-                        int cmp = w1.timeOffset.compareTo(w2.timeOffset);
-                        if (cmp != 0) {
-                            return cmp;
-                        }
-                        if (w1.side == w2.side) {
-                            return 0;
-                        }
-                        return (w1.side == LEFT) ? -1 : 1;
-                    });
+            Collections.sort(events, TimedWedge.ORDER);
 
             it = events.listIterator();
+        }
+
+        /**
+         * Report the time offset of a chord linked to a wedge end.
+         * <p>
+         * A chord off the time slots has none of its own: we use the standard chord a grace
+         * chord is attached to, otherwise the slot closest in abscissa.
+         *
+         * @param chord the wedge chord
+         * @return its time offset, or null if none can be inferred
+         */
+        private Rational timeOffsetOf (AbstractChordInter chord)
+        {
+            if (chord.getTimeOffset() != null) {
+                return chord.getTimeOffset();
+            }
+
+            final SIGraph sig = chord.getSig();
+
+            for (Relation rel : sig.getRelations(chord, ChordGraceRelation.class)) {
+                if (sig.getOppositeInter(chord, rel) instanceof AbstractChordInter std
+                        && std.getTimeOffset() != null) {
+                    return std.getTimeOffset();
+                }
+            }
+
+            final Slot slot = chord.getMeasure().getStack().getClosestSlot(chord.getCenter());
+
+            return (slot != null) ? slot.getTimeOffset() : null;
         }
 
         /**
@@ -3744,7 +3788,7 @@ public class PartwiseBuilder
                 while (it.hasNext()) {
                     TimedWedge event = it.next();
 
-                    if (event.timeOffset.compareTo(timeOffset) <= 0) {
+                    if (event.isDueAt(timeOffset)) {
                         processWedge(event.wedge, event.side, event.referenceNote);
                     } else {
                         it.previous();
