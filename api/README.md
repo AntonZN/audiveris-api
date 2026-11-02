@@ -289,7 +289,7 @@ PDF не трогается: Audiveris рисует его сам на 300 DPI. 
 | `OUTPUT_DIR` | `storage/out` | Директория для результатов |
 | `REDIS_URL` | `redis://redis:6379/0` | URL подключения к Redis |
 | `TASK_WORKERS` | `1` | Количество воркеров |
-| `PROCESSING_TIMEOUT_PER_FILE_SECONDS` | `60` | Таймаут обработки: single = 60 сек, playlist = N * 60 сек |
+| `PROCESSING_TIMEOUT_PER_FILE_SECONDS` | `120` | Таймаут обработки: single = 120 сек, playlist = N * 120 сек |
 
 ### Валидация
 

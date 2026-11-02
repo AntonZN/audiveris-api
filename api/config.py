@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     validate_ttl_seconds: int = 3600
     cleanup_interval_seconds: int = 3600
     max_pdf_pages: int = 5
-    processing_timeout_per_file_seconds: int = 60
+    processing_timeout_per_file_seconds: int = 120
     # Рендер PDF в Audiveris. Audiveris рендерит PDF на фиксированных 300 DPI и
     # ОТБРАСЫВАЕТ лист, если картинка > maxPixelCount (20 млн пикселей, хардкод
     # LoadStep.java) → «Too large image» → Created scores: [] → нет MusicXML.
