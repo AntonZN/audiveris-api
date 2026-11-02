@@ -48,6 +48,12 @@ PRESET_CONSTANTS: dict[Preset, list[str]] = {
         # надо повторять без ключа.
         f"{_PREFIX}.oneLineStaves=true",
         f"{_PREFIX}.crossHeads=true",
+        # Форшлаги (флэмы, дроби): без малых головок Audiveris их не видит.
+        # Drummer's Delight 82.5 → 97.2, Jingle Bells 68.4 → 91.5 на tests/images/drum/pdmx,
+        # остальные не хуже. Ложные малые головки (стык цифр размера 4/4, паузы, слэши)
+        # отсекает форк: NoteHeadsBuilder на драм-стане ищет их только от семени штиля и
+        # с оценкой ≥ 0.65. Без этого Stinkfist терял размер 4/4 и падал 82 → 52.
+        f"{_PREFIX}.smallHeads=true",
     ],
 
     Preset.drums_1line: [
@@ -58,6 +64,7 @@ PRESET_CONSTANTS: dict[Preset, list[str]] = {
         f"{_PREFIX}.drumNotation=true",
         f"{_PREFIX}.oneLineStaves=true",
         f"{_PREFIX}.crossHeads=true",
+        f"{_PREFIX}.smallHeads=true",
         f"{_PREFIX}.fiveLineStaves=false",
     ],
 

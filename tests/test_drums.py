@@ -212,5 +212,14 @@ class DrumPresetStavesTest(unittest.TestCase):
         self.assertIn("org.audiveris.omr.sheet.ProcessingSwitches.fiveLineStaves=false", args)
 
 
+class DrumPresetGraceTest(unittest.TestCase):
+    def test_drum_presets_read_grace_notes(self) -> None:
+        """Форшлаг — малая головка; без smallHeads Audiveris его не видит (Drummer's Delight)."""
+        for preset in (Preset.drums, Preset.drums_1line):
+            with self.subTest(preset=preset):
+                self.assertIn("org.audiveris.omr.sheet.ProcessingSwitches.smallHeads=true",
+                              get_preset_args(preset))
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
