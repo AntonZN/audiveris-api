@@ -1277,6 +1277,13 @@ public class NoteHeadsBuilder
                 0.75,
                 "Least of a template's height a head's own ink may stand");
 
+        // On a drum staff, the small template is tried wherever an oval may stand, and what it
+        // meets there besides grace heads (quarter rests, slash heads, time digits) matches
+        // below 0.65, while grace heads match above 0.69 (open drum corpus, 20 charts).
+        private final Constant.Ratio minDrumSmallHeadGrade = new Constant.Ratio(
+                0.65,
+                "Minimum grade for a small head on a drum staff");
+
         private final Constant.Ratio crossBoost = new Constant.Ratio(
                 0.0, // Was 0.1,
                 "How much do we boost cross heads (badly recognized by template matching)");
@@ -1595,6 +1602,16 @@ public class NoteHeadsBuilder
 
             scannerTemplateNotesHollow = scannerShapes.clone();
             scannerTemplateNotesHollow.retainAll(sheetTemplateNotesHollow);
+
+            if (!useSeeds && isUnpitched(staff)) {
+                // On a drum staff, a small head is looked up along a stem seed only.
+                // Browsing the line finds one where the two digits of a time signature meet,
+                // the upper digit standing for its stem, and its ink would be erased before
+                // the symbols step can read the time signature.
+                // A grace stem, unlike that digit, is thin and straight enough to give a seed.
+                scannerTemplateNotesAll.removeAll(ShapeSet.HeadsOvalSmall);
+                scannerTemplateNotesHollow.removeAll(ShapeSet.HeadsOvalSmall);
+            }
 
             if (constants.dumpTemplateNotes.isSet()) {
                 if (!line.getStaff().isDrum()) {
@@ -2158,6 +2175,11 @@ public class NoteHeadsBuilder
             // Use one anchor for each horizontal side of the stem seed
             final Anchor[] anchors = new Anchor[] { LEFT_STEM, RIGHT_STEM };
 
+            // On a drum staff, a small head must match well
+            final double minSmallGrade = isUnpitched(line.getStaff())
+                    ? constants.minDrumSmallHeadGrade.getValue()
+                    : 0;
+
             for (Glyph seed : seeds) {
                 if (seed.isVip()) {
                     logger.info("VIP lookupSeeds for seed#{}", seed.getId());
@@ -2224,6 +2246,10 @@ public class NoteHeadsBuilder
                                 line.getStaff(),
                                 pitch);
                         if (head == null) {
+                            continue;
+                        }
+
+                        if (shape.isSmallHead() && (head.getGrade() < minSmallGrade)) {
                             continue;
                         }
 
