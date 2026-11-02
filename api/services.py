@@ -568,8 +568,10 @@ class AudiverisService:
     # начинает писать .mvt2.mxl, .mvt3.mxl. На выходе клиенту уходит только .mvt1
     # (sorted()[0] в _find_outputs) — мобила играет первую треть песни и обрывает.
     # Для одиночной фотки и плейлиста (всегда одна песня по нескольким снимкам)
-    # детекцию выключаем; для многостраничного PDF оставляем — он реально может
-    # быть многочастной сонатой, где разделение полезно.
+    # детекцию выключаем. Для PDF раньше оставляли (соната бывает многочастной), но
+    # Audiveris теперь зовётся только для ударных, а клиенту и так уходит одна .mvt1:
+    # Count-Down (вариации малого барабана) разбивался на 6 частей, и из 145 тактов
+    # клиент получал 20.
     _NO_MOVEMENT_SPLIT = [
         "-constant", "org.audiveris.omr.sheet.ProcessingSwitches.indentations=false",
     ]
@@ -762,9 +764,6 @@ class AudiverisService:
         preset_enum = Preset(preset) if preset else Preset.default
         preset_args = [*get_preset_args(preset_enum), *extra_args]
 
-        is_pdf = input_path.suffix.lower() == ".pdf"
-        movement_args = [] if is_pdf else self._NO_MOVEMENT_SPLIT
-
         # PDF: ограничиваем DPI рендера, чтобы страница не превысила лимит Audiveris
         # (иначе «Too large image» → пустой результат). Для не-PDF пусто.
         pdf_args = self._pdf_resolution_args([input_path])
@@ -774,7 +773,7 @@ class AudiverisService:
             "-batch",
             "-constant", f"org.audiveris.omr.sheet.ScaleBuilder.minInterline={settings.min_interline}",
             *pdf_args,
-            # *movement_args,
+            *self._NO_MOVEMENT_SPLIT,
             *preset_args,
             "-transcribe", "-export",
             "-output", str(output_dir),

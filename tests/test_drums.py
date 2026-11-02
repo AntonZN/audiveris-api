@@ -235,6 +235,16 @@ class DrumRoutingTest(unittest.TestCase):
         self.assertEqual(audiveris.call_args.args[0], pdf)
         self.assertFalse(list(self.out.glob("*.clean.png")))
 
+    def test_drums_are_not_split_into_movements(self) -> None:
+        """Клиенту уходит одна .mvt1: Count-Down разбивался на 6 частей, 20 тактов из 145."""
+        pdf = self.inbox / "score.pdf"
+        pdf.write_bytes(b"%PDF-1.4\n")
+        with mock.patch.object(self.service, "_pdf_resolution_args", return_value=[]), \
+             mock.patch.object(self.service, "_execute_and_process", return_value=self.done) as run:
+            self.service._run_audiveris(pdf, self.out, "drums")
+        self.assertIn("org.audiveris.omr.sheet.ProcessingSwitches.indentations=false",
+                      run.call_args.args[0])
+
     def test_tab_crash_is_retried_without_one_line_staves(self) -> None:
         """TAB + oneLineStaves = NegativeArraySizeException (mix-under-the-bridge)."""
         second = (self.out / "five-line-only" / "page.clean.mxl", self.out / "page.log", 24)
