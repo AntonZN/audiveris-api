@@ -2,9 +2,11 @@
 
 homr ударных не знает (перкуссионный ключ читает как альтовый, крестики теряет),
 поэтому `drums`/`drums_1line` идут прямо в Audiveris. Сторожится: маршрут, отказ
-от отката на homr, лесенка интервалов для однолинейного стана, сама оценка
-интервала по головкам, карта ударных форка (app/res/drum-set.xml) и ключи станов
-в пресетах.
+от отката на homr, подготовка снимка (масштаб до интервала 24, свет, Otsu; порог
+интервала — после масштаба), лесенка интервалов для однолинейного стана по
+подготовленной странице, сама оценка интервала по головкам, повтор без
+`oneLineStaves`, карта ударных форка (app/res/drum-set.xml) и ключи станов в
+пресетах.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from unittest import mock
 import numpy as np
 
 from api import drums, omr_bridge, services
-from api.exceptions import ProcessingError
+from api.exceptions import LowInterlineError, ProcessingError
 from api.models import FileResult
 from api.presets import Preset, get_preset_args
 
@@ -50,6 +52,95 @@ def _snare_line(head: int) -> np.ndarray:
     return image
 
 
+def _staff_page(interline: int, width: int = 1170, staves: int = 6) -> np.ndarray:
+    """Пятилинейная страница: по умолчанию — скриншот телефона, интервал 10."""
+    image = np.full((int(width * 1.4), width), 255, np.uint8)
+    left, right = int(width * 0.05), int(width * 0.95)
+    for index in range(staves):
+        top = interline * 6 + index * interline * 11
+        for k in range(5):
+            cv2.line(image, (left, top + k * interline), (right, top + k * interline), 0,
+                     max(1, interline // 10))
+        for i in range(12):
+            x = int(width * 0.1) + i * int(width * 0.07)
+            cy = top + (i % 5) * interline // 2
+            cv2.ellipse(image, (x, cy), (int(interline * 0.65), interline // 2), -20, 0, 360, 0, -1)
+            stem = x + int(interline * 0.6)
+            cv2.line(image, (stem, cy), (stem, cy - int(interline * 3.5)), 0, max(1, interline // 8))
+    return image
+
+
+def _staff_interline(image: np.ndarray) -> float | None:
+    from omr.staff import analyse
+
+    _, staves, interline = analyse(image)
+    return interline if staves else None
+
+
+@unittest.skipIf(cv2 is None, "нужен OpenCV")
+class PhotoPrepTest(unittest.TestCase):
+    """Снимок для Audiveris: интервал около 24 px, ровный свет, только чёрное и белое."""
+
+    def test_screenshot_is_scaled_to_the_target_interline(self) -> None:
+        shot = _staff_page(10)
+        interline = drums.photo_interline(shot, one_line=False)
+        self.assertAlmostEqual(interline, 10, delta=0.5)
+        scale, binarize = drums.photo_plan(shot.shape, interline, one_line=False)
+        prepared = drums.prepare_photo(shot, scale, interline * scale, binarize)
+
+        self.assertAlmostEqual(scale, 2.4, delta=0.1)
+        self.assertEqual(set(np.unique(prepared).tolist()), {0, 255})
+        self.assertAlmostEqual(_staff_interline(prepared), drums.TARGET_INTERLINE, delta=1)
+
+    def test_scale_stays_within_audiveris_pixel_limit(self) -> None:
+        """Больше 20 Мп Audiveris не берёт («Too large image»): 48-Мп фото уменьшаем."""
+        for one_line in (False, True):
+            with self.subTest(one_line=one_line):
+                scale, _ = drums.photo_plan((8064, 6048), 30, one_line)
+                self.assertLess(scale, drums.TARGET_INTERLINE / 30)
+                self.assertLessEqual(8064 * 6048 * scale * scale, drums.MAX_PIXELS * 1.001)
+
+    def test_one_line_page_of_normal_size_keeps_its_scale_and_grey(self) -> None:
+        """Растяжение размывает пик толщины единственной линии: perc-01 (18 px) падал на SCALE."""
+        self.assertEqual(drums.photo_plan((2299, 2142), 18, one_line=True), (1.0, False))
+        scale, binarize = drums.photo_plan((1514, 1170), 10, one_line=True)
+        self.assertAlmostEqual(scale, 2.4, delta=0.01)
+        self.assertTrue(binarize)
+        self.assertEqual(drums.photo_plan((2299, 2142), 18, one_line=False)[1], True)
+
+    def test_grey_page_gets_only_the_light_fix(self) -> None:
+        clean = _snare_line(18)
+        shadow = (clean * np.linspace(0.5, 1.0, clean.shape[1])[None, :]).astype(np.uint8)
+        prepared = drums.prepare_photo(shadow, 1.0, 18, binarize=False)
+
+        self.assertEqual(prepared.shape, clean.shape)
+        self.assertGreater(len(np.unique(prepared)), 2)
+        paper = clean == 255
+        self.assertGreater(np.percentile(prepared[paper], 5), 240)
+
+    def test_uneven_light_is_flattened(self) -> None:
+        """Тень с одного края: Otsu по сырому кадру заливает её чёрным, по выровненному — нет."""
+        clean = _staff_page(24)
+        shadow = (clean * np.linspace(0.35, 1.0, clean.shape[1])[None, :]).astype(np.uint8)
+        _, naive = cv2.threshold(shadow, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        prepared = drums.prepare_photo(shadow, 1.0, 24)
+
+        ink = (clean == 0).mean()
+        self.assertGreater((naive == 0).mean(), ink + 0.2)
+        self.assertAlmostEqual((prepared == 0).mean(), ink, delta=0.01)
+        self.assertAlmostEqual(_staff_interline(prepared), 24, delta=1)
+
+    def test_one_line_page_is_measured_by_noteheads(self) -> None:
+        """Линий для разметки нет: analyse собрал бы «стан» из штрихов (137 px вместо 10)."""
+        with mock.patch("omr.staff.analyse", side_effect=AssertionError("analyse не нужен")):
+            self.assertAlmostEqual(drums.photo_interline(_snare_line(18), one_line=True), 18, delta=1)
+
+    def test_page_without_staff_has_no_interline(self) -> None:
+        blank = np.full((1600, 1170), 255, np.uint8)
+        self.assertIsNone(drums.photo_interline(blank, one_line=False))
+        self.assertIsNone(drums.photo_interline(blank, one_line=True))
+
+
 @unittest.skipIf(cv2 is None, "нужен OpenCV")
 class InterlineEstimateTest(unittest.TestCase):
     def test_interline_is_the_notehead_height(self) -> None:
@@ -66,31 +157,117 @@ class InterlineEstimateTest(unittest.TestCase):
         self.assertEqual(drums.ladder(9, 9), [9, 10, 11])
 
 
+@unittest.skipIf(cv2 is None, "нужен OpenCV")
 class DrumRoutingTest(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.out = Path(self._tmp.name)
-        self.photo = self.out / "page.png"
-        # Содержимое неважно: движки замоканы, файл нужен как путь.
-        self.photo.write_bytes(b"\x89PNG\r\n\x1a\n")
         self.addCleanup(self._tmp.cleanup)
+        self.out = Path(self._tmp.name)
+        self.inbox = self.out / "in"
+        self.inbox.mkdir()
+        # Скриншот телефона: интервал 10, ниже прод-порога MIN_INTERLINE=11.
+        self.photo = self.inbox / "page.png"
+        cv2.imwrite(str(self.photo), _staff_page(10))
+        self.prepared = self.out / "page.clean.png"
         self.service = services.AudiverisService()
-        self.done = (self.out / "page.mxl", self.out / "page.log", 20)
+        self.done = (self.out / "page.clean.mxl", self.out / "page.log", 24)
+        floor = mock.patch.object(services.settings, "min_interline", 11)
+        floor.start()
+        self.addCleanup(floor.stop)
+
+    def _built(self):
+        return mock.patch.object(self.service, "_build_success_result",
+                                 return_value=FileResult(filename="page.clean.mxl"))
 
     def test_drums_go_straight_to_audiveris(self) -> None:
         with mock.patch.object(omr_bridge, "run") as omr, \
              mock.patch.object(services.homr_service, "run") as homr, \
              mock.patch.object(self.service, "_run_audiveris", return_value=self.done) as audiveris, \
-             mock.patch.object(self.service, "_build_success_result",
-                               return_value=FileResult(filename="page.mxl")):
+             self._built():
             result = self.service.process_single(self.photo, self.out, preset="drums")
 
         self.assertIsNone(result.error)
         audiveris.assert_called_once()
-        _, target, preset, extra, _ = audiveris.call_args.args
-        self.assertEqual((target, preset, list(extra)), (self.out, "drums", []))
+        page, target, preset, extra, _ = audiveris.call_args.args
+        self.assertEqual((page, target, preset, list(extra)), (self.prepared, self.out, "drums", []))
         omr.assert_not_called()
         homr.assert_not_called()
+
+    def test_small_screenshot_is_scaled_before_the_interline_floor(self) -> None:
+        """Интервал 10 < 11 — раньше отказ до распознавания; теперь Audiveris видит 24."""
+        with mock.patch.object(self.service, "_run_audiveris", return_value=self.done) as audiveris, \
+             self._built():
+            result = self.service.process_single(self.photo, self.out, preset="drums")
+
+        self.assertIsNone(result.error)
+        audiveris.assert_called_once()
+        prepared = cv2.imread(str(audiveris.call_args.args[0]), cv2.IMREAD_GRAYSCALE)
+        self.assertAlmostEqual(_staff_interline(prepared), drums.TARGET_INTERLINE, delta=1)
+        self.assertTrue(self.photo.exists(), "исходный снимок нужен архиву провалов")
+
+    def test_interline_floor_applies_after_scaling(self) -> None:
+        """Не растянуть до порога (лимит пикселей Audiveris) — понятный отказ без Audiveris."""
+        with mock.patch.object(drums, "MAX_PIXELS", 600_000), \
+             mock.patch.object(self.service, "_run_audiveris") as audiveris:
+            result = self.service.process_single(self.photo, self.out, preset="drums")
+
+        audiveris.assert_not_called()
+        self.assertIn("слишком мелкий", result.error or "")
+        self.assertIn("11px", result.error or "")
+
+    def test_page_without_staff_fails_plainly(self) -> None:
+        cv2.imwrite(str(self.photo), np.full((1600, 1170), 255, np.uint8))
+        with mock.patch.object(self.service, "_run_audiveris") as audiveris:
+            result = self.service.process_single(self.photo, self.out, preset="drums")
+
+        audiveris.assert_not_called()
+        self.assertIn("интервал", result.error or "")
+
+    def test_pdf_goes_to_audiveris_as_is(self) -> None:
+        """PDF Audiveris рисует сам на 300 DPI и читает на 95-100% — не трогаем."""
+        pdf = self.inbox / "score.pdf"
+        pdf.write_bytes(b"%PDF-1.4\n")
+        with mock.patch.object(self.service, "_run_audiveris", return_value=self.done) as audiveris, \
+             self._built():
+            self.service.process_single(pdf, self.out, preset="drums")
+
+        self.assertEqual(audiveris.call_args.args[0], pdf)
+        self.assertFalse(list(self.out.glob("*.clean.png")))
+
+    def test_tab_crash_is_retried_without_one_line_staves(self) -> None:
+        """TAB + oneLineStaves = NegativeArraySizeException (mix-under-the-bridge)."""
+        second = (self.out / "five-line-only" / "page.clean.mxl", self.out / "page.log", 24)
+        with mock.patch.object(self.service, "_run_audiveris",
+                               side_effect=[ProcessingError("NegativeArraySizeException"), second]
+                               ) as audiveris, \
+             self._built() as build:
+            result = self.service.process_single(self.photo, self.out, preset="drums")
+
+        self.assertIsNone(result.error)
+        tried = [(call.args[1], list(call.args[3])) for call in audiveris.call_args_list]
+        self.assertEqual(tried, [
+            (self.out, []),
+            (self.out / "five-line-only", ["-constant", drums.NO_ONE_LINE_STAVES]),
+        ])
+        build.assert_called_once_with(second[0], second[1])
+
+    def test_low_interline_is_not_retried(self) -> None:
+        with mock.patch.object(self.service, "_run_audiveris",
+                               side_effect=LowInterlineError(8, "interline=8px", self.out / "b.log")
+                               ) as audiveris:
+            result = self.service.process_single(self.photo, self.out, preset="drums")
+
+        audiveris.assert_called_once()
+        self.assertIn("interline=8px", result.error or "")
+
+    def test_one_line_override_follows_the_preset_constant(self) -> None:
+        """Повтор `-constant` перекрывает ключ пресета, только если стоит после него."""
+        with mock.patch.object(self.service, "_execute_and_process", return_value=self.done) as run:
+            self.service._run_audiveris(self.photo, self.out, "drums",
+                                        ["-constant", drums.NO_ONE_LINE_STAVES])
+        cmd = run.call_args.args[0]
+        self.assertLess(cmd.index("org.audiveris.omr.sheet.ProcessingSwitches.oneLineStaves=true"),
+                        cmd.index(drums.NO_ONE_LINE_STAVES))
 
     def test_failed_drums_do_not_fall_back_to_homr(self) -> None:
         """homr на ударных выдал бы «успешный» мусор — лучше честная ошибка."""
@@ -104,12 +281,11 @@ class DrumRoutingTest(unittest.TestCase):
 
     def test_one_line_drums_climb_the_interline_ladder(self) -> None:
         """Окно Audiveris узкое: при провале на оценке пробуем соседний интервал."""
-        second = (self.out / "interline-19" / "page.mxl", self.out / "page.log", None)
+        second = (self.out / "interline-19" / "page.clean.mxl", self.out / "page.log", None)
         with mock.patch.object(drums, "estimate_interline", return_value=18), \
              mock.patch.object(self.service, "_run_audiveris",
                                side_effect=[ProcessingError("NPE"), second]) as audiveris, \
-             mock.patch.object(self.service, "_build_success_result",
-                               return_value=FileResult(filename="page.mxl")) as build:
+             self._built() as build:
             result = self.service.process_single(self.photo, self.out, preset="drums_1line")
 
         self.assertIsNone(result.error)
@@ -120,6 +296,46 @@ class DrumRoutingTest(unittest.TestCase):
         ])
         build.assert_called_once_with(second[0], second[1])
 
+    def test_one_line_ladder_is_measured_on_the_prepared_page(self) -> None:
+        """Мелкий снимок (головки 14 px): Audiveris получает страницу и интервал после масштаба."""
+        cv2.imwrite(str(self.photo), _snare_line(14))
+        with mock.patch.object(self.service, "_run_audiveris", return_value=self.done) as audiveris, \
+             self._built():
+            result = self.service.process_single(self.photo, self.out, preset="drums_1line")
+
+        self.assertIsNone(result.error)
+        page, target, _, extra, _ = audiveris.call_args.args
+        self.assertEqual(page, self.prepared)
+        value = int(extra[-1].rsplit("=", 1)[1])
+        self.assertEqual(target.name, f"interline-{value}")
+        self.assertAlmostEqual(value, drums.TARGET_INTERLINE, delta=3)
+        self.assertEqual(value, drums.estimate_interline(cv2.imread(str(page), cv2.IMREAD_GRAYSCALE)))
+
+    def test_one_line_photo_of_normal_size_is_not_scaled(self) -> None:
+        """Головки 18 px — рабочее окно Audiveris: только свет, без растяжения и Otsu."""
+        page = _snare_line(18)
+        cv2.imwrite(str(self.photo), page)
+        with mock.patch.object(self.service, "_run_audiveris", return_value=self.done) as audiveris, \
+             self._built():
+            result = self.service.process_single(self.photo, self.out, preset="drums_1line")
+
+        self.assertIsNone(result.error)
+        prepared = cv2.imread(str(audiveris.call_args.args[0]), cv2.IMREAD_GRAYSCALE)
+        self.assertEqual(prepared.shape, page.shape)
+        value = int(audiveris.call_args.args[3][-1].rsplit("=", 1)[1])
+        self.assertAlmostEqual(value, 18, delta=1)
+
+    def test_one_line_drums_are_not_retried_without_one_line_staves(self) -> None:
+        """У drums_1line других станов нет: провал ведёт по лесенке, а не к выключению ключа."""
+        with mock.patch.object(drums, "estimate_interline", return_value=18), \
+             mock.patch.object(self.service, "_run_audiveris",
+                               side_effect=ProcessingError("NPE")) as audiveris:
+            result = self.service.process_single(self.photo, self.out, preset="drums_1line")
+
+        self.assertEqual(result.error, "NPE")
+        for call in audiveris.call_args_list:
+            self.assertNotIn(drums.NO_ONE_LINE_STAVES, call.args[3])
+
     def test_one_line_drums_without_estimate_fail_plainly(self) -> None:
         with mock.patch.object(drums, "estimate_interline", return_value=None), \
              mock.patch.object(self.service, "_run_audiveris") as audiveris:
@@ -129,22 +345,22 @@ class DrumRoutingTest(unittest.TestCase):
         self.assertIn("интервал", result.error or "")
 
     def test_drum_playlist_is_one_audiveris_book(self) -> None:
-        second = self.out / "page2.png"
-        second.write_bytes(b"\x89PNG\r\n\x1a\n")
+        second = self.inbox / "page2.png"
+        cv2.imwrite(str(second), _staff_page(10))
         with mock.patch.object(self.service, "_run_homr_playlist") as homr_playlist, \
              mock.patch.object(self.service, "_run_audiveris_playlist",
                                return_value=self.done) as audiveris, \
-             mock.patch.object(self.service, "_build_success_result",
-                               return_value=FileResult(filename="page.mxl")):
+             self._built():
             result = self.service.process_playlist([self.photo, second], self.out, preset="drums")
 
         self.assertIsNone(result.error)
         audiveris.assert_called_once()
-        self.assertEqual(audiveris.call_args.args[0], [self.photo, second])
+        self.assertEqual(audiveris.call_args.args[0],
+                         [self.out / "0.page.clean.png", self.out / "1.page2.clean.png"])
         homr_playlist.assert_not_called()
 
     def test_format_audiveris_cannot_read_is_reported(self) -> None:
-        odd = self.out / "score.sib"
+        odd = self.inbox / "score.sib"
         odd.write_bytes(b"\x00\x01")
         with mock.patch.object(self.service, "_run_audiveris") as audiveris:
             result = self.service.process_single(odd, self.out, preset="drums")
@@ -210,6 +426,11 @@ class DrumPresetStavesTest(unittest.TestCase):
     def test_only_drums_1line_switches_five_line_staves_off(self) -> None:
         args = get_preset_args(Preset.drums_1line)
         self.assertIn("org.audiveris.omr.sheet.ProcessingSwitches.fiveLineStaves=false", args)
+
+    def test_only_drums_retries_without_one_line_staves(self) -> None:
+        self.assertTrue(drums.reads_one_line_staves("drums"))
+        self.assertFalse(drums.reads_one_line_staves("drums_1line"))
+        self.assertFalse(drums.reads_one_line_staves("default"))
 
 
 class DrumPresetGraceTest(unittest.TestCase):

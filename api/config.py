@@ -37,16 +37,6 @@ class Settings(BaseSettings):
     # на 300 DPI) рендерятся на полном pdf_render_dpi без потери качества.
     pdf_render_dpi: int = 300      # верхняя граница (дефолт Audiveris)
     pdf_max_pixels: int = 18_000_000  # бюджет пикселей на страницу (запас под 20М лимит)
-    # Image preprocessing
-    # Upscale only genuinely tiny scans. Normal sheet-music scans (~1000-1800px)
-    # transcribe fine at native resolution; upscaling them blurs small tempo/metronome
-    # digits and breaks OCR of the BPM (e.g. "95" -> "9s" -> tempo=9), so we keep a low
-    # threshold to leave such images untouched.
-    image_min_dimension: int = 1000  # Minimum width/height to skip upscale
-    image_upscale_factor: float = 2.0  # Upscale multiplier (only for images below the threshold)
-    image_contrast_factor: float = 1.2  # Contrast enhancement
-    image_sharpness_factor: float = 1.5  # Sharpness enhancement
-
     # --- Пайплайн подготовки omr/ ---
     # Перед движком снимок проходит omr/: ориентация (скан боком), разрез
     # разворота книги, рамка страницы и гомография, dewarp, свет и масштаб;
