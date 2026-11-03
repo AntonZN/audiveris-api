@@ -598,6 +598,7 @@ class AudiverisService:
         output_path, log_path, _ = self._drum_attempts(
             output_dir, [prepared], preset, run, self._timeout_for_single()
         )
+        self._drum_tempo(output_path, log_path, [prepared])
         return self._build_success_result(output_path, log_path)
 
     def _recognize_drums_playlist(
@@ -619,7 +620,62 @@ class AudiverisService:
         output_path, log_path, _ = self._drum_attempts(
             output_dir, prepared, preset, run, self._timeout_for_playlist(prepared)
         )
+        self._drum_tempo(output_path, log_path, prepared)
         return self._build_success_result(output_path, log_path)
+
+    @staticmethod
+    def _drum_tempo(output_path: Path, log_path: Path | None, pages: list[Path]) -> None:
+        """Темп ударных — наш OCR над первым станом (`api/tempo_ocr.py`), а не Audiveris.
+
+        Нашли число — оно и есть темп начала (с половинной нотой отметки — вдвое, см.
+        `tempo_ocr.half_note`). Audiveris прочитал ту же отметку с тем же числом — его
+        темп остаётся: ноту отметки он знает лучше нас (точку, например, мы не видим).
+        Не нашли — темп Audiveris тоже остаётся. Замер на корпусе (20 PDF, 40 снимков,
+        perc-01): число у Audiveris неверно один раз (Venus, фото: 95 вместо 90), и там
+        мы отметку прочли; ложного числа на листе без отметки он не дал ни разу, а когда
+        промежуточная версия нашего OCR отметку пропускала, число Audiveris было верным
+        (3 из 3). Выбросив его, мы бы теряли верный темп и ничего не выигрывали.
+
+        Сбой OCR задачу не роняет: темп — метаданные, а ноты уже распознаны.
+        """
+        from api import tempo_ocr
+        from api.analysis import (
+            _BPM_MAX, _BPM_MIN, collect_bpm, drop_start_tempo, replace_bpm, start_metronome,
+        )
+
+        started = time.monotonic()
+        engine = collect_bpm(output_path)
+        reading = None
+        try:
+            reading = tempo_ocr.read_tempo(pages)
+        except ImportError as exc:
+            # Нет RapidOCR — значит, нет и homr; в образе он стоит всегда.
+            logger.warning("OCR темпа недоступен: %s", exc)
+        except Exception:
+            logger.exception("OCR темпа упал на %s", output_path.name)
+        if reading is None or reading.bpm is None:
+            # Неправдоподобное число — ошибка OCR Audiveris («95» прочитано как «9s»
+            # давало темп 9), а не отметка; коридор тот же, что у `bpm_from_texts`.
+            implausible = engine is not None and not _BPM_MIN <= engine <= _BPM_MAX
+            if implausible and drop_start_tempo(output_path):
+                verdict = f"темп Audiveris {engine} вне {_BPM_MIN}..{_BPM_MAX}, убран"
+            else:
+                verdict = f"остаётся темп Audiveris: {engine}"
+        elif start_metronome(output_path) == reading.printed:
+            verdict = f"Audiveris прочитал то же число, его темп остаётся: {engine}"
+        elif replace_bpm(output_path, reading.bpm, reading.unit, reading.printed):
+            verdict = f"темп Audiveris {engine} заменён на {reading.bpm}"
+        else:
+            verdict = f"не удалось вписать {reading.bpm}, остаётся темп Audiveris: {engine}"
+        found = reading.describe() if reading is not None else "темп по OCR: сбой"
+        note = f"{found} -> {verdict} ({time.monotonic() - started:.1f} c)"
+        logger.info("ударные: %s: %s", output_path.name, note)
+        if log_path is not None:
+            try:
+                with log_path.open("a") as handle:
+                    handle.write(f"\n{note}\n")
+            except OSError:
+                logger.exception("не удалось дописать лог %s", log_path)
 
     def _drum_page(self, input_path: Path, target: Path, preset: str) -> Path:
         """Страница для Audiveris: PDF как есть, снимок — подготовленный в `target`.

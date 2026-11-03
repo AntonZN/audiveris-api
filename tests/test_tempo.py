@@ -248,5 +248,277 @@ class EngineSidecarTest(unittest.TestCase):
             self.assertEqual(_read_ocr_sidecar(path), ["♩=95", "3"])
 
 
+TWO_PARTS = """<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list>
+    <score-part id="P1"><part-name>P1</part-name></score-part>
+    <score-part id="P2"><part-name>P2</part-name></score-part>
+  </part-list>
+  <part id="P1">
+    <measure number="1"><attributes><divisions>1</divisions></attributes>
+      <note><rest/><duration>4</duration></note></measure>
+    <measure number="2">
+      <direction><direction-type><metronome><beat-unit>quarter</beat-unit>
+        <per-minute>95</per-minute></metronome></direction-type><sound tempo="95"/></direction>
+      <note><rest/><duration>4</duration></note></measure>
+  </part>
+  <part id="P2">
+    <measure number="1"><attributes><divisions>1</divisions></attributes>
+      <direction placement="above"><direction-type><metronome><beat-unit>half</beat-unit>
+        <per-minute>70</per-minute></metronome></direction-type><sound tempo="140"/></direction>
+      <note><rest/><duration>4</duration></note></measure>
+    <measure number="2"><note><rest/><duration>4</duration></note></measure>
+  </part>
+</score-partwise>
+"""
+
+
+def _tempo_marks(path: Path) -> list[tuple[str, str, str | None]]:
+    """(партия, такт, sound tempo) для каждой отметки темпа."""
+    from api.analysis import _read_musicxml_root
+
+    marks = []
+    for part in _read_musicxml_root(path).iter("part"):
+        for measure in part.iter("measure"):
+            for direction in measure.iter("direction"):
+                sound = direction.find("sound")
+                if direction.find(".//metronome") is not None or sound is not None:
+                    marks.append((part.get("id"), measure.get("number"),
+                                  sound.get("tempo") if sound is not None else None))
+    return marks
+
+
+class ReplaceStartTempoTest(unittest.TestCase):
+    """Темп ударных — наш OCR: отметка начала заменяется, смены темпа дальше остаются."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.score = Path(self._tmp.name) / "page.musicxml"
+        self.score.write_text(TWO_PARTS)
+
+    def test_start_metronome_is_the_printed_number(self) -> None:
+        """«𝅗𝅥 = 70»: напечатано 70, а `<sound tempo>` уже пересчитан в четверти."""
+        from api.analysis import start_metronome
+
+        self.assertEqual(start_metronome(self.score), 70)
+        self.assertEqual(collect_bpm(self.score), 95)   # первый в документе — такт 2 у P1
+
+    def test_replaces_the_start_tempo_of_every_part_and_keeps_later_changes(self) -> None:
+        from api.analysis import replace_bpm
+
+        self.assertTrue(replace_bpm(self.score, 87))
+
+        self.assertEqual(collect_bpm(self.score), 87)
+        self.assertEqual(_tempo_marks(self.score), [("P1", "1", "87"), ("P1", "2", "95")])
+
+    def test_works_inside_mxl(self) -> None:
+        import zipfile
+
+        from api.analysis import replace_bpm
+
+        packed = self.score.with_suffix(".mxl")
+        with zipfile.ZipFile(packed, "w") as archive:
+            archive.writestr("META-INF/container.xml",
+                             '<container><rootfiles><rootfile full-path="score.xml"/>'
+                             "</rootfiles></container>")
+            archive.writestr("score.xml", TWO_PARTS)
+
+        self.assertTrue(replace_bpm(packed, 87))
+        self.assertEqual(collect_bpm(packed), 87)
+
+
+def _drum_page(staff_top: int, width: int = 1400, interline: int = 20, tilt: int = 0):
+    """Страница с двумя пятилинейными станами, первый — с `staff_top`.
+
+    `tilt` — на сколько px правый конец линий выше левого (наклонное фото).
+    """
+    import cv2
+    import numpy as np
+
+    image = np.full((staff_top + 16 * interline, width), 255, np.uint8)
+    for top in (staff_top, staff_top + 9 * interline):
+        for k in range(5):
+            y = top + k * interline
+            cv2.line(image, (60, y), (width - 60, y - tilt), 0, 2)
+        for i in range(14):
+            x = 120 + i * 85
+            cy = top + (i % 5) * interline // 2 - tilt * (x - 60) // (width - 120)
+            cv2.ellipse(image, (x, cy), (13, 10), -20, 0, 360, 0, -1)
+            cv2.line(image, (x + 12, cy), (x + 12, cy - 70), 0, 2)
+    return image
+
+
+class TempoOcrTest(unittest.TestCase):
+    """api/tempo_ocr.py: строки над первым станом, слева направо, первая страница с нотами.
+
+    Сам RapidOCR подменён: здесь проверяется, ЧТО ему дают и что делают с ответом.
+    Строки задаются в координатах страницы; подмена переводит их в масштаб картинки,
+    которую получила (страницу перед OCR приводят к интервалу 24 px).
+    """
+
+    WIDTH = 1400
+
+    def setUp(self) -> None:
+        try:
+            import cv2  # noqa: F401
+        except ImportError:  # pragma: no cover
+            self.skipTest("нужен OpenCV")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+        self.shown: list[tuple[float, float]] = []   # (высота, ширина) в координатах страницы
+
+    def _reader(self, *passes: list[tuple[float, float, str]]):
+        """Ответ OCR на каждый вызов по очереди; последний повторяется."""
+        from unittest import mock
+
+        import numpy as np
+
+        from api import tempo_ocr
+
+        def read(image):
+            scale = image.shape[1] / self.WIDTH
+            self.shown.append((image.shape[0] / scale, image.shape[1] / scale))
+            lines = passes[min(len(self.shown), len(passes)) - 1]
+            return [(np.float32([[x, y], [x + 120, y], [x + 120, y + 30], [x, y + 30]]) * scale, text)
+                    for x, y, text in lines]
+
+        return mock.patch.object(tempo_ocr, "_reader", read)
+
+    def _png(self, name: str, image) -> Path:
+        import cv2
+
+        path = self.dir / name
+        cv2.imwrite(str(path), image)
+        return path
+
+    def test_reads_the_mark_above_the_first_staff(self) -> None:
+        from api.tempo_ocr import read_tempo
+
+        page = self._png("page.png", _drum_page(staff_top=300))
+        with self._reader([(500, 100, "WONDERWALL - Oasis"), (40, 40, "J= 87")]):
+            reading = read_tempo([page])
+
+        self.assertEqual((reading.bpm, reading.page), (87, 0))
+        self.assertEqual(reading.texts, ["J= 87", "WONDERWALL - Oasis"])
+        height, width = self.shown[0]
+        self.assertEqual(round(width), self.WIDTH)     # вся ширина: отметка бывает в углу
+        self.assertTrue(380 <= height < 480, height)   # первый стан целиком, второго нет
+
+    def test_text_inside_the_staff_is_not_the_mark(self) -> None:
+        """Цифры размера, триоли, «X·X» на нотах — внутри стана; отметка — над ним."""
+        from api.tempo_ocr import read_tempo
+
+        page = self._png("page.png", _drum_page(staff_top=300))
+        with self._reader([(40, 320, "J=60"), (40, 230, "J=90")]):
+            self.assertEqual(read_tempo([page]).bpm, 90)
+
+    def test_tilted_staff_is_compared_where_the_mark_stands(self) -> None:
+        """Фото: правый конец стана на 60 px выше левого. Отметка над левым концом —
+        ниже правого; срез по одной высоте отрезал бы её (Pull Me Under)."""
+        from api.tempo_ocr import read_tempo
+
+        page = self._png("page.png", _drum_page(staff_top=360, tilt=60))
+        with self._reader([(60, 290, "J= 102")]):
+            self.assertEqual(read_tempo([page]).bpm, 102)
+
+    def test_the_leftmost_of_several_marks_is_the_start(self) -> None:
+        """Venus: над первым станом 90 (такт 1) и 95 (такт 2); OCR отдаёт 95 первой — она выше."""
+        from api.tempo_ocr import read_tempo
+
+        page = self._png("page.png", _drum_page(staff_top=300))
+        with self._reader([(700, 200, "=95"), (300, 240, "J=90")]):
+            self.assertEqual(read_tempo([page]).bpm, 90)
+
+    def test_second_scale_is_tried_when_the_first_reads_nothing(self) -> None:
+        """Pull Me Under: на одном масштабе OCR теряет «=» и читает голое «102»."""
+        from api import tempo_ocr
+
+        page = self._png("page.png", _drum_page(staff_top=300))
+        with self._reader([(40, 240, "102")], [(40, 240, "J= 102")]):
+            reading = tempo_ocr.read_tempo([page])
+
+        self.assertEqual(reading.bpm, 102)
+        self.assertEqual(len(self.shown), 2)
+
+    def test_cover_page_is_skipped(self) -> None:
+        import numpy as np
+
+        from api.tempo_ocr import read_tempo
+
+        cover = self._png("0.png", np.full((1800, self.WIDTH), 255, np.uint8))
+        page = self._png("1.png", _drum_page(staff_top=300))
+        with self._reader([(40, 240, "J=120")]):
+            reading = read_tempo([cover, page])
+
+        self.assertEqual((reading.bpm, reading.page), (120, 1))
+        self.assertEqual(len(self.shown), 1)   # обложку в OCR не отдавали
+
+    def test_mark_on_a_later_page_is_not_the_start_tempo(self) -> None:
+        """Нет отметки на первой странице с нотами — дальше не ищем: там смена темпа."""
+        from api import tempo_ocr
+
+        first = self._png("0.png", _drum_page(staff_top=300))
+        second = self._png("1.png", _drum_page(staff_top=300))
+        with self._reader([(40, 240, "Moderate rock")]):
+            reading = tempo_ocr.read_tempo([first, second])
+
+        self.assertIsNone(reading.bpm)
+        self.assertEqual(reading.page, 0)
+        self.assertEqual(reading.texts, ["Moderate rock"])
+        self.assertEqual(len(self.shown), len(tempo_ocr.OCR_INTERLINES))   # одна страница
+
+
+def _metronome_mark(hollow: bool):
+    """«♩ = 70» или «𝅗𝅥 = 70»: головка со штилем вверх, знак равенства, число."""
+    import cv2
+    import numpy as np
+
+    image = np.full((120, 300), 255, np.uint8)
+    cv2.ellipse(image, (45, 80), (11, 8), -25, 0, 360, 0, 3 if hollow else -1)
+    cv2.line(image, (55, 77), (55, 22), 0, 3)
+    cv2.putText(image, "= 70", (70, 88), cv2.FONT_HERSHEY_SIMPLEX, 1.4, 0, 4)
+    return image
+
+
+class HalfNoteTest(unittest.TestCase):
+    """Little Drummer Boy: «𝅗𝅥 = 70» — это 140 четвертей; OCR читает ноту буквой «J»."""
+
+    def setUp(self) -> None:
+        try:
+            import cv2  # noqa: F401
+            import numpy as np
+        except ImportError:  # pragma: no cover
+            self.skipTest("нужен OpenCV")
+        # Рамка OCR — с «=» и далее: ноту она часто не включает.
+        self.box = np.float32([[62, 40], [200, 40], [200, 95], [62, 95]])
+
+    def test_hollow_head_is_a_half_note(self) -> None:
+        from api.tempo_ocr import half_note
+
+        self.assertTrue(half_note(_metronome_mark(hollow=True), self.box))
+
+    def test_filled_head_is_a_quarter(self) -> None:
+        from api.tempo_ocr import half_note
+
+        self.assertFalse(half_note(_metronome_mark(hollow=False), self.box))
+
+    def test_digit_with_a_hole_is_not_a_note(self) -> None:
+        """В рамке только «70»: левый знак — цифра, и дырка в «0» тут ни при чём."""
+        import numpy as np
+
+        from api.tempo_ocr import half_note
+
+        digits_only = np.float32([[150, 40], [200, 40], [200, 95], [150, 95]])
+        self.assertFalse(half_note(_metronome_mark(hollow=True), digits_only))
+
+    def test_reading_counts_quarters(self) -> None:
+        from api.tempo_ocr import TempoReading
+
+        self.assertEqual(TempoReading(printed=70, unit="half", page=0).bpm, 140)
+        self.assertEqual(TempoReading(printed=70, page=0).bpm, 70)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

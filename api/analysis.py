@@ -278,6 +278,16 @@ def _add_tempo_to_root(root, bpm: int) -> bool:
     (идемпотентно — не дублируем)."""
     if root.find(".//sound[@tempo]") is not None or root.find(".//per-minute") is not None:
         return False
+    return _insert_start_tempo(root, bpm)
+
+
+def _insert_start_tempo(root, bpm: int, beat_unit: str = "quarter",
+                        per_minute: int | None = None) -> bool:
+    """In-place: темп в начало первого такта первой партии, без проверки, что его нет.
+
+    `bpm` — четверти в минуту (`<sound tempo>`), `beat_unit`/`per_minute` — отметка как
+    напечатана: «𝅗𝅥 = 70» — это half/70 и sound 140.
+    """
     part = root.find("part")
     if part is None:
         return False
@@ -288,8 +298,8 @@ def _add_tempo_to_root(root, bpm: int) -> bool:
     direction = ET.Element("direction", {"placement": "above"})
     dtype = ET.SubElement(direction, "direction-type")
     metronome = ET.SubElement(dtype, "metronome")
-    ET.SubElement(metronome, "beat-unit").text = "quarter"
-    ET.SubElement(metronome, "per-minute").text = str(bpm)
+    ET.SubElement(metronome, "beat-unit").text = beat_unit
+    ET.SubElement(metronome, "per-minute").text = str(per_minute or bpm)
     ET.SubElement(direction, "sound", {"tempo": str(bpm)})
 
     # По схеме MusicXML <direction> идёт после <attributes>, если он есть в такте.
@@ -300,6 +310,77 @@ def _add_tempo_to_root(root, bpm: int) -> bool:
             break
     measure.insert(insert_at, direction)
     return True
+
+
+def _first_measures(root):
+    for part in root.findall("part"):
+        measure = part.find("measure")
+        if measure is not None:
+            yield measure
+
+
+def _drop_start_tempo(root) -> bool:
+    """In-place: убрать темп из первого такта каждой партии.
+
+    Audiveris кладёт отметку в ту партию, над чьим станом она напечатана (в ансамбле
+    Firing Range — в девятую), поэтому смотрим все. Поздние такты не трогаем: там смены темпа, и их
+    Audiveris читает верно (Venus: 90 в первом такте, 95 во втором).
+    """
+    changed = False
+    for measure in _first_measures(root):
+        for direction in measure.findall("direction"):
+            for dtype in direction.findall("direction-type"):
+                if dtype.find("metronome") is not None:
+                    direction.remove(dtype)
+                    changed = True
+        for holder in [measure, *measure.findall("direction")]:
+            for sound in holder.findall("sound"):
+                if sound.get("tempo") is not None:
+                    del sound.attrib["tempo"]
+                    changed = True
+                if not sound.attrib and len(sound) == 0:
+                    holder.remove(sound)
+        for direction in measure.findall("direction"):
+            if direction.find("direction-type") is None and direction.find("sound") is None:
+                measure.remove(direction)
+    return changed
+
+
+def start_metronome(path: Path) -> int | None:
+    """Число с метрономной отметки первого такта — как оно напечатано на странице.
+
+    Не `<sound tempo>`: тот пересчитан в четверти («𝅗𝅥 = 70» даёт 140), а сравнивать
+    это число надо с тем, что прочитано с картинки.
+    """
+    root = _read_musicxml_root(path)
+    if root is None:
+        return None
+    for measure in _first_measures(root):
+        for per_minute in measure.iter("per-minute"):
+            try:
+                return round(float((per_minute.text or "").strip()))
+            except ValueError:
+                continue
+    return None
+
+
+def replace_bpm(path: Path, bpm: int, beat_unit: str = "quarter",
+                per_minute: int | None = None) -> bool:
+    """Темп начала — `bpm` четвертей в минуту: отметки первого такта убрать, вписать свою.
+
+    Для ударных: темп в выходе Audiveris — это его OCR, а у нас есть свой
+    (api/tempo_ocr.py). Возвращает True, если файл изменён.
+    """
+    def edit(root) -> bool:
+        _drop_start_tempo(root)
+        return _insert_start_tempo(root, bpm, beat_unit, per_minute)
+
+    return _edit_musicxml(path, edit)
+
+
+def drop_start_tempo(path: Path) -> bool:
+    """Убрать темп начала (отметки первого такта). True, если было что убирать."""
+    return _edit_musicxml(path, _drop_start_tempo)
 
 
 # Метрономная отметка в распознанном тексте. Число берём ТОЛЬКО когда оно
@@ -348,39 +429,44 @@ def inject_bpm(path: Path, bpm: int) -> bool:
     становится доступно через `collect_bpm`. Работает на .mxl и .musicxml/.xml.
     Идемпотентно. Возвращает True, если файл изменён.
     """
+    return _edit_musicxml(path, lambda root: _add_tempo_to_root(root, bpm))
+
+
+def _edit_musicxml(path: Path, edit) -> bool:
+    """Применить `edit(root) -> изменено ли` к .mxl или .musicxml/.xml; записать, если изменено."""
     if path.suffix.lower() == ".mxl":
-        return _inject_bpm_mxl(path, bpm)
-    return _inject_bpm_plain(path, bpm)
+        return _edit_mxl(path, edit)
+    return _edit_plain(path, edit)
 
 
-def _inject_bpm_plain(path: Path, bpm: int) -> bool:
+def _edit_plain(path: Path, edit) -> bool:
     try:
         tree = ET.parse(str(path))
     except Exception:
-        logger.exception("bpm inject: failed to parse %s", path)
+        logger.exception("tempo edit: failed to parse %s", path)
         return False
-    if not _add_tempo_to_root(tree.getroot(), bpm):
+    if not edit(tree.getroot()):
         return False
     try:
         tree.write(str(path), encoding="utf-8", xml_declaration=True)
         return True
     except Exception:
-        logger.exception("bpm inject: failed to write %s", path)
+        logger.exception("tempo edit: failed to write %s", path)
         return False
 
 
-def _inject_bpm_mxl(path: Path, bpm: int) -> bool:
-    """Распаковать .mxl, добавить темп в rootfile, перепаковать (если изменили)."""
+def _edit_mxl(path: Path, edit) -> bool:
+    """Распаковать .mxl, поправить rootfile, перепаковать (если изменили)."""
     try:
         with zipfile.ZipFile(path, "r") as zin:
             entries = [(zi, zin.read(zi.filename)) for zi in zin.infolist()]
     except Exception:
-        logger.exception("bpm inject: failed to read %s", path)
+        logger.exception("tempo edit: failed to read %s", path)
         return False
 
     rootfile_name = _find_mxl_rootfile(entries)
     if rootfile_name is None:
-        logger.warning("bpm inject: no rootfile found in %s", path)
+        logger.warning("tempo edit: no rootfile found in %s", path)
         return False
 
     changed = False
@@ -390,9 +476,9 @@ def _inject_bpm_mxl(path: Path, bpm: int) -> bool:
             try:
                 root = ET.fromstring(data)
             except Exception:
-                logger.exception("bpm inject: failed to parse %s in %s", rootfile_name, path)
+                logger.exception("tempo edit: failed to parse %s in %s", rootfile_name, path)
                 return False
-            if _add_tempo_to_root(root, bpm):
+            if edit(root):
                 changed = True
                 data = b'<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="utf-8")
         new_entries.append((zi, data))
@@ -405,7 +491,7 @@ def _inject_bpm_mxl(path: Path, bpm: int) -> bool:
                 zout.writestr(zi.filename, data)
         return True
     except Exception:
-        logger.exception("bpm inject: failed to write %s", path)
+        logger.exception("tempo edit: failed to write %s", path)
         return False
 
 

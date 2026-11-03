@@ -175,6 +175,10 @@ class DrumRoutingTest(unittest.TestCase):
         floor = mock.patch.object(services.settings, "min_interline", 11)
         floor.start()
         self.addCleanup(floor.stop)
+        # Темп проверяется в DrumTempoTest; тут OCR только тратил бы время.
+        tempo = mock.patch.object(services.AudiverisService, "_drum_tempo")
+        self.tempo = tempo.start()
+        self.addCleanup(tempo.stop)
 
     def _built(self):
         return mock.patch.object(self.service, "_build_success_result",
@@ -193,6 +197,8 @@ class DrumRoutingTest(unittest.TestCase):
         self.assertEqual((page, target, preset, list(extra)), (self.prepared, self.out, "drums", []))
         omr.assert_not_called()
         homr.assert_not_called()
+        # Темп читается с той же подготовленной страницы, что видел Audiveris.
+        self.tempo.assert_called_once_with(self.done[0], self.done[1], [self.prepared])
 
     def test_small_screenshot_is_scaled_before_the_interline_floor(self) -> None:
         """Интервал 10 < 11 — раньше отказ до распознавания; теперь Audiveris видит 24."""
@@ -366,9 +372,10 @@ class DrumRoutingTest(unittest.TestCase):
 
         self.assertIsNone(result.error)
         audiveris.assert_called_once()
-        self.assertEqual(audiveris.call_args.args[0],
-                         [self.out / "0.page.clean.png", self.out / "1.page2.clean.png"])
+        pages = [self.out / "0.page.clean.png", self.out / "1.page2.clean.png"]
+        self.assertEqual(audiveris.call_args.args[0], pages)
         homr_playlist.assert_not_called()
+        self.tempo.assert_called_once_with(self.done[0], self.done[1], pages)
 
     def test_format_audiveris_cannot_read_is_reported(self) -> None:
         odd = self.inbox / "score.sib"
@@ -424,6 +431,106 @@ class EmptySheetTest(unittest.TestCase):
                                return_value=(self.out / "score.mxl", None, None)) as run:
             self.service._run_audiveris(self.out / "in" / "score.png", self.out, "drums")
         self.assertEqual(run.call_args.kwargs["book"], self.out / "score.omr")
+
+
+AUDIVERIS_SCORE = """<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Drumset</part-name></score-part></part-list>
+  <part id="P1"><measure number="1"><attributes><divisions>1</divisions></attributes>
+    <direction><direction-type><metronome><beat-unit>{unit}</beat-unit>
+      <per-minute>{printed}</per-minute></metronome></direction-type><sound tempo="{tempo}"/></direction>
+    <note><unpitched><display-step>C</display-step><display-octave>5</display-octave></unpitched>
+      <duration>4</duration></note></measure></part>
+</score-partwise>
+"""
+
+
+class DrumTempoTest(unittest.TestCase):
+    """Темп ударных — наш OCR над первым станом, а не Tesseract Audiveris."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.out = Path(self._tmp.name)
+        self.score = self.out / "page.clean.musicxml"
+        self.log = self.out / "audiveris.log"
+        self.log.write_text("audiveris\n")
+        self.pages = [self.out / "page.clean.png"]
+
+    def _audiveris(self, printed: int, tempo: int, unit: str = "quarter") -> None:
+        self.score.write_text(AUDIVERIS_SCORE.format(unit=unit, printed=printed, tempo=tempo))
+
+    def _ocr(self, bpm: int | None, unit: str = "quarter", **kwargs):
+        from api import tempo_ocr
+
+        reading = tempo_ocr.TempoReading(printed=bpm, unit=unit, page=0,
+                                         texts=[f"J={bpm}" if bpm else "Moderate rock"])
+        return mock.patch.object(tempo_ocr, "read_tempo", return_value=reading, **kwargs)
+
+    def _bpm(self) -> int | None:
+        from api.analysis import collect_bpm
+
+        return collect_bpm(self.score)
+
+    def test_audiveris_tempo_is_replaced_by_ours(self) -> None:
+        self._audiveris(printed=9, tempo=9)          # «95» прочитано как «9s»
+        with self._ocr(95) as ocr:
+            services.AudiverisService._drum_tempo(self.score, self.log, self.pages)
+
+        ocr.assert_called_once_with(self.pages)
+        self.assertEqual(self._bpm(), 95)
+        self.assertIn("заменён на 95", self.log.read_text())
+
+    def test_tempo_is_written_when_audiveris_found_none(self) -> None:
+        self.score.write_text(AUDIVERIS_SCORE.replace("<direction>", "<!--").replace("</direction>", "-->")
+                              .format(unit="", printed="", tempo=""))
+        with self._ocr(87):
+            services.AudiverisService._drum_tempo(self.score, self.log, self.pages)
+
+        self.assertEqual(self._bpm(), 87)
+
+    def test_half_note_mark_is_written_in_quarters(self) -> None:
+        """Little Drummer Boy: Audiveris отметку не нашёл, мы — «𝅗𝅥 = 70»."""
+        from api.analysis import start_metronome
+
+        self._audiveris(printed=120, tempo=120)
+        with self._ocr(70, unit="half"):
+            services.AudiverisService._drum_tempo(self.score, self.log, self.pages)
+
+        self.assertEqual(self._bpm(), 140)
+        self.assertEqual(start_metronome(self.score), 70)
+        self.assertIn("<beat-unit>half</beat-unit>", self.score.read_text())
+
+    def test_same_number_keeps_audiveris_beat_unit(self) -> None:
+        """«𝅗𝅥 = 70»: мы видим только 70, Audiveris — ещё и половинную, у него 140."""
+        self._audiveris(printed=70, tempo=140, unit="half")
+        with self._ocr(70):
+            services.AudiverisService._drum_tempo(self.score, self.log, self.pages)
+
+        self.assertEqual(self._bpm(), 140)
+
+    def test_nothing_read_keeps_audiveris_tempo(self) -> None:
+        self._audiveris(printed=120, tempo=120)
+        with self._ocr(None):
+            services.AudiverisService._drum_tempo(self.score, self.log, self.pages)
+
+        self.assertEqual(self._bpm(), 120)
+        self.assertIn("отметки нет", self.log.read_text())
+
+    def test_implausible_audiveris_tempo_is_dropped_when_nothing_read(self) -> None:
+        """«95», прочитанное Tesseract как «9s», давало темп 9 — это не отметка."""
+        self._audiveris(printed=9, tempo=9)
+        with self._ocr(None):
+            services.AudiverisService._drum_tempo(self.score, self.log, self.pages)
+
+        self.assertIsNone(self._bpm())
+
+    def test_ocr_failure_does_not_fail_the_task(self) -> None:
+        self._audiveris(printed=120, tempo=120)
+        with self._ocr(None, side_effect=ImportError("No module named 'rapidocr'")):
+            services.AudiverisService._drum_tempo(self.score, self.log, self.pages)
+
+        self.assertEqual(self._bpm(), 120)
 
 
 def _drum_set() -> dict[tuple[int, int, str], str]:
