@@ -26,29 +26,36 @@ usage() {
   backup.sh db [проект...]        только база
   backup.sh media [проект...]     только медиа
   backup.sh check [проект...]     проверить доступ к S3, контейнеры и тома
+  backup.sh install               check всех проектов и запуск каждую ночь через cron (от root)
   backup.sh list <проект>         что лежит в S3
   backup.sh restore-db <проект> [дамп|latest] [--db ИМЯ] [--yes]
   backup.sh restore-media <проект> <имя> <куда> [--from deleted/<папка>] [--yes]
 EOF
 }
 
-BACKUP_HOME=${BACKUP_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}
-if [[ ! -f $BACKUP_HOME/s3.env ]]; then
-	echo "нет $BACKUP_HOME/s3.env (образец — s3.env.example)" >&2
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+BACKUP_HOME=${BACKUP_HOME:-${SELF%/*}}
+# s3.env — общие настройки, лежит в git; secrets.env — ключи этого сервера, в git его нет.
+for f in s3.env secrets.env; do
+	if [[ -f $BACKUP_HOME/$f ]]; then
+		# shellcheck source=/dev/null
+		source "$BACKUP_HOME/$f"
+	fi
+done
+
+: "${S3_BUCKET:?S3_BUCKET не задан в $BACKUP_HOME/s3.env}"
+if [[ -z ${S3_ACCESS_KEY:-} || -z ${S3_SECRET_KEY:-} ]]; then
+	echo "нет ключей S3. Создайте secrets.env и впишите S3_ACCESS_KEY и S3_SECRET_KEY:" >&2
+	echo "  cp $BACKUP_HOME/secrets.env.example $BACKUP_HOME/secrets.env" >&2
 	exit 2
 fi
-# shellcheck source=/dev/null
-source "$BACKUP_HOME/s3.env"
-
-: "${S3_BUCKET:?S3_BUCKET не задан в s3.env}"
-: "${S3_ACCESS_KEY:?S3_ACCESS_KEY не задан в s3.env}"
-: "${S3_SECRET_KEY:?S3_SECRET_KEY не задан в s3.env}"
 S3_PREFIX=${S3_PREFIX:-}
 S3_PREFIX=${S3_PREFIX#/}
 S3_PREFIX=${S3_PREFIX%/}
 RCLONE_IMAGE=${RCLONE_IMAGE:-rclone/rclone:1.75.2}
 WORK_DIR=${WORK_DIR:-/var/tmp/docker-backup}
 BACKUP_HOST_LABEL=${BACKUP_HOST_LABEL:-$(hostname)}
+BACKUP_CRON=${BACKUP_CRON:-30 3 * * *}
 
 # Настройки rclone — через переменные окружения: docker run -e ИМЯ берёт
 # значение отсюда, и ключи не светятся в `ps` аргументами командной строки.
@@ -437,6 +444,29 @@ cmd_check() {
 	return "$bad"
 }
 
+cmd_install() {
+	local cron=/etc/cron.d/docker-backup log=/var/log/docker-backup.log status
+	[[ -w ${cron%/*} ]] || die "нет прав на ${cron%/*} — запустите от root"
+	set +e
+	(
+		set -e
+		cmd_check
+	)
+	status=$?
+	set -e
+	((status == 0)) || die "проверка не прошла — в cron не поставлено"
+	[[ ! -f $BACKUP_HOME/secrets.env ]] || chmod 600 "$BACKUP_HOME/secrets.env"
+	# PATH — как сейчас: у cron свой куцый, и docker из /usr/local/bin или snap он не найдёт.
+	{
+		echo "# Бэкап docker-проектов в S3. Поставлено: $SELF install"
+		echo "PATH=$PATH"
+		echo "BACKUP_HOME=$BACKUP_HOME"
+		printf '%s root %q run >> %s 2>&1\n' "$BACKUP_CRON" "$SELF" "$log"
+	} >"$cron"
+	chmod 644 "$cron"
+	echo "✓ cron: $cron, расписание «$BACKUP_CRON», лог — $log"
+}
+
 cmd_list() {
 	[[ $# -eq 1 ]] || die "использование: backup.sh list <проект>"
 	load_project "$1"
@@ -538,6 +568,7 @@ main() {
 	case $cmd in
 	run | db | media) cmd_backup "$cmd" "$@" ;;
 	check) cmd_check "$@" ;;
+	install) cmd_install ;;
 	list) cmd_list "$@" ;;
 	restore-db) cmd_restore_db "$@" ;;
 	restore-media) cmd_restore_media "$@" ;;

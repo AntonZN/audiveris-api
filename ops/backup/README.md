@@ -29,39 +29,36 @@ Postgres и зеркалит медиа в S3, старое чистит сам�
 
 ## Установка на сервер
 
-1. Бакет и ключ. Создайте бакет, а для бэкапа — отдельный сервисный аккаунт и
-   ключ с правами только на этот бакет (в Yandex Cloud — роль
-   `storage.editor` на бакет).
-2. Скопируйте папку на сервер, например в `/opt/backup`:
-   ```bash
-   scp -r ops/backup root@server:/opt/backup
-   ```
-3. На сервере — общие настройки:
-   ```bash
-   cd /opt/backup && cp s3.env.example s3.env && chmod 600 s3.env && nano s3.env
-   ```
-4. По файлу на каждый проект: `projects/<имя>.env`, имя файла — папка в
-   бакете. Образец — `projects/audiveris.env.example`. Имена контейнера и тома:
-   ```bash
-   docker ps --format '{{.Names}}' && docker volume ls
-   ```
-5. Проверка и первый прогон:
-   ```bash
-   /opt/backup/backup.sh check
-   ```
-   ```bash
-   /opt/backup/backup.sh run
-   ```
-6. Каждую ночь в 3:30 — `/etc/cron.d/docker-backup`:
-   ```
-   30 3 * * * root /opt/backup/backup.sh run >> /var/log/docker-backup.log 2>&1
-   ```
+Всё, кроме ключей, уже в репозитории: `s3.env` (Selectel, бакет, сроки) и
+`projects/audiveris.env`. Ключ — S3-ключ сервисного пользователя Selectel с
+доступом к бакету.
 
-Ещё один проект на этом же сервере — ещё один файл в `projects/`. Проект на
-другом сервере — та же папка там, с тем же бакетом и своим `S3_PREFIX` или
-своими именами проектов.
+В папке репозитория на сервере, от root:
+
+```bash
+git pull
+```
+```bash
+cp ops/backup/secrets.env.example ops/backup/secrets.env && nano ops/backup/secrets.env
+```
+```bash
+ops/backup/backup.sh install
+```
+
+`install` проверяет запись в бакет, контейнер базы и том с медиа и, если всё в
+порядке, ставит запуск каждую ночь в 3:30 (`/etc/cron.d/docker-backup`, лог —
+`/var/log/docker-backup.log`). Если что-то не так, пишет что и в cron не
+ставит. Первый бэкап можно не ждать: `ops/backup/backup.sh run`.
+
+Ещё один проект на этом же сервере — ещё один файл `projects/<имя>.env`, имя
+файла — папка в бакете. Проект на другом сервере — скопируйте туда папку
+(`scp -r ops/backup root@server:/opt/backup`), уберите `projects/audiveris.env`,
+положите свой проект и `secrets.env`, затем `install`. Бакет тот же; чтобы
+серверы не путались, им можно задать разные `S3_PREFIX`.
 
 ## Уведомления
+
+Токены и адреса — в `secrets.env`.
 
 - `TG_BOT_TOKEN` + `TG_CHAT_ID` — при любой ошибке в Telegram приходит
   сообщение с логом упавших проектов. Проект, который упал, не мешает остальным.
@@ -72,17 +69,17 @@ Postgres и зеркалит медиа в S3, старое чистит сам�
 ## Восстановление
 
 ```bash
-/opt/backup/backup.sh list audiveris
+ops/backup/backup.sh list audiveris
 ```
 
 База — последний дамп или конкретный, можно в другую базу рядом, чтобы
 сначала посмотреть:
 
 ```bash
-/opt/backup/backup.sh restore-db audiveris latest --db catalog_check
+ops/backup/backup.sh restore-db audiveris latest --db catalog_check
 ```
 ```bash
-/opt/backup/backup.sh restore-db audiveris weekly/catalog_2026-10-27_033000.dump
+ops/backup/backup.sh restore-db audiveris weekly/catalog_2026-10-27_033000.dump
 ```
 
 Восстановление поверх рабочей базы перезаписывает её; перед этим остановите
@@ -93,10 +90,10 @@ Postgres и зеркалит медиа в S3, старое чистит сам�
 архива удалённого:
 
 ```bash
-/opt/backup/backup.sh restore-media audiveris catalog audiveris-api_storage:/out/catalog
+ops/backup/backup.sh restore-media audiveris catalog audiveris-api_storage:/out/catalog
 ```
 ```bash
-/opt/backup/backup.sh restore-media audiveris catalog /tmp/old --from deleted/2026-11-03_033000
+ops/backup/backup.sh restore-media audiveris catalog /tmp/old --from deleted/2026-11-03_033000
 ```
 
 Файлы восстанавливаются от root — если приложение работает от другого
