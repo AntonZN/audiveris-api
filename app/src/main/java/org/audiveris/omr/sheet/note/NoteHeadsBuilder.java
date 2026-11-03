@@ -1679,10 +1679,20 @@ public class NoteHeadsBuilder
                     return allShapes; // Nothing on this pitch value
                 }
 
+                // A drum staff written with a pitched clef (a snare drum with a bass clef) is
+                // printed with ordinary heads: other motifs would only produce false heads
+                // (on a scan, a triangle at -3 won over the oval there)
+                final boolean ordinaryOnly = staff.isDrumWithPitchedClef();
+
                 for (DrumInstrument inst : msMap.values()) {
                     if (inst != null) {
                         // Motif + Sign (not used at template time)
                         final HeadMotif motif = inst.headMotif;
+
+                        if (ordinaryOnly && (motif != HeadMotif.oval) && (motif != HeadMotif.small)) {
+                            continue;
+                        }
+
                         final List<Shape> shapes = ShapeSet.getMotifSet(motif);
                         allShapes.addAll(shapes);
                     }

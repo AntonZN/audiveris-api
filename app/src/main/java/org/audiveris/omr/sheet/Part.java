@@ -1092,6 +1092,21 @@ public class Part
      */
     public boolean isDrumPart ()
     {
+        return isDeclaredDrumPart() || (!staves.isEmpty() && staves.get(0).isDrumByContext());
+    }
+
+    //--------------------//
+    // isDeclaredDrumPart //
+    //--------------------//
+    /**
+     * Report whether this part is declared as a (5-line unpitched) percussion part,
+     * by a percussion clef in its first measure.
+     *
+     * @return true if so, false if not (or if not certain, e.g. if no first measure clef is found)
+     * @see Staff#isDrumByContext()
+     */
+    public boolean isDeclaredDrumPart ()
+    {
         final Measure firstMeasure = getFirstMeasure();
 
         if (firstMeasure != null) {

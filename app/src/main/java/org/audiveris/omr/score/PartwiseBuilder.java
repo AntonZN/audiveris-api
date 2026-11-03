@@ -404,7 +404,8 @@ public class PartwiseBuilder
             pmClef.setNumber(new BigInteger("" + (1 + clef.getStaff().getIndexInPart())));
         }
 
-        Shape shape = clef.getShape();
+        // A drum staff written with a pitched clef is exported with a percussion clef
+        Shape shape = clef.getStaff().isDrumByContext() ? Shape.PERCUSSION_CLEF : clef.getShape();
 
         if (shape != Shape.PERCUSSION_CLEF) {
             /**
@@ -2339,8 +2340,16 @@ public class PartwiseBuilder
                 } else if (current.isDrumPart) {
                     // Unpitched 5-line percussion staff
                     Unpitched unpitched = factory.createUnpitched();
-                    unpitched.setDisplayStep(stepOf(note.getStep()));
-                    unpitched.setDisplayOctave(note.getOctave());
+                    if (staff.isDrumByContext()) {
+                        // Display by staff position, as with a percussion clef:
+                        // the written clef does not matter and may even be missed
+                        final int position = note.getIntegerPitch();
+                        unpitched.setDisplayStep(stepOf(ClefInter.noteStepOf(null, position)));
+                        unpitched.setDisplayOctave(ClefInter.octaveOf(null, position));
+                    } else {
+                        unpitched.setDisplayStep(stepOf(note.getStep()));
+                        unpitched.setDisplayOctave(note.getOctave());
+                    }
                     current.pmNote.setUnpitched(unpitched);
                 } else {
                     // Pitch

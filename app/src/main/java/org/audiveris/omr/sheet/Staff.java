@@ -21,6 +21,7 @@
 // </editor-fold>
 package org.audiveris.omr.sheet;
 
+import org.audiveris.omr.constant.Constant;
 import org.audiveris.omr.constant.ConstantSet;
 import org.audiveris.omr.glyph.Glyph;
 import org.audiveris.omr.glyph.GlyphIndex;
@@ -1568,6 +1569,20 @@ public class Staff
      */
     public boolean isDrum ()
     {
+        return isDeclaredDrum() || isDrumByContext();
+    }
+
+    //----------------//
+    // isDeclaredDrum //
+    //----------------//
+    /**
+     * Report whether this staff is declared as unpitched: a 1-line staff, or a 5-line
+     * staff with a percussion clef.
+     *
+     * @return true if so
+     */
+    public boolean isDeclaredDrum ()
+    {
         if (getLineCount() == 1) {
             return true;
         }
@@ -1576,7 +1591,67 @@ public class Staff
             return header.clef.getShape() == PERCUSSION_CLEF;
         }
 
-        return part.isDrumPart();
+        return part.isDeclaredDrumPart();
+    }
+
+    //-----------------//
+    // isDrumByContext //
+    //-----------------//
+    /**
+     * Report whether this 5-line staff, although not declared as unpitched, must be
+     * processed as a drum staff.
+     * <p>
+     * Older editions write a snare drum part on a 5-line staff with a bass (or any) clef.
+     * In a drum notation book, with the 'pitchedClefDrums' constant set, a 5-line staff is
+     * considered as unpitched when its sheet contains no declared drum staff at all.
+     * A sheet that mixes drums with pitched parts (bass guitar, melody) is thus left untouched.
+     * <p>
+     * This also covers a drum chart that prints no clef at all: its heads were already looked
+     * up with the drum set motifs, but its notes were exported as pitched ones.
+     * <p>
+     * This is not meant for the clef retrieval itself, which must use {@link #isDeclaredDrum()}.
+     *
+     * @return true if so
+     */
+    public boolean isDrumByContext ()
+    {
+        // (A dummy staff, built at export for a part absent from a system, has no lines)
+        if ((lines == null) || (lines.size() != 5) || !constants.pitchedClefDrums.isSet()
+                || (system == null)) {
+            return false;
+        }
+
+        final Sheet sheet = system.getSheet();
+
+        if (!sheet.getStub().getProcessingSwitches().getValue(ProcessingSwitch.drumNotation)) {
+            return false;
+        }
+
+        return sheet.getStaffManager().getStaves().stream().noneMatch(Staff::isDeclaredDrum);
+    }
+
+    //-----------------------//
+    // isDrumWithPitchedClef //
+    //-----------------------//
+    /**
+     * Report whether this staff is a drum one by context, on a sheet that writes its
+     * staves with pitched clefs (a snare drum with a bass clef), rather than with no clef
+     * at all (a drum chart that prints none).
+     * <p>
+     * Such an edition prints ordinary heads, while a chart without clef may print any
+     * drum motif (crosses for hi-hat and cymbals).
+     *
+     * @return true if so
+     */
+    public boolean isDrumWithPitchedClef ()
+    {
+        if (!isDrumByContext()) {
+            return false;
+        }
+
+        return system.getSheet().getStaffManager().getStaves().stream().anyMatch(
+                s -> (s.header != null) && (s.header.clef != null)
+                        && (s.header.clef.getShape() != PERCUSSION_CLEF));
     }
 
     //---------//
@@ -2324,6 +2399,10 @@ public class Staff
         private final Scale.Fraction definingPointSize = new Scale.Fraction(
                 0.05,
                 "Display width of a defining point");
+
+        private final Constant.Boolean pitchedClefDrums = new Constant.Boolean(
+                false,
+                "In drum notation, should a sheet with no drum staff have its 5-line staves as drums?");
     }
 
     //--------------//

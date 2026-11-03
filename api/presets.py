@@ -45,7 +45,7 @@ PRESET_CONSTANTS: dict[Preset, list[str]] = {
         # остаются включены — выключает их только drums_1line.
         # Известная регрессия: если на листе есть TAB, Audiveris с этим ключом
         # падает (NegativeArraySizeException, mix-under-the-bridge) — такой файл
-        # надо повторять без ключа.
+        # надо повторять без ключа (это делает сервис, `_drum_attempts`).
         f"{_PREFIX}.oneLineStaves=true",
         f"{_PREFIX}.crossHeads=true",
         # Форшлаги (флэмы, дроби): без малых головок Audiveris их не видит.
@@ -54,6 +54,12 @@ PRESET_CONSTANTS: dict[Preset, list[str]] = {
         # отсекает форк: NoteHeadsBuilder на драм-стане ищет их только от семени штиля и
         # с оценкой ≥ 0.65. Без этого Stinkfist терял размер 4/4 и падал 82 → 52.
         f"{_PREFIX}.smallHeads=true",
+        # Малый барабан в старых изданиях пишут на пятилинейном стане с басовым (любым)
+        # ключом — Audiveris читал его нотами с высотой (Count-Down: 0 ударных из 663).
+        # Форк: лист, где нет ни одного ударного стана (однолинейного или с
+        # перкуссионным ключом), читается по месту на стане (Staff.isDrumByContext).
+        # Листы, где ударные соседствуют с басом или мелодией, не задеваются.
+        "org.audiveris.omr.sheet.Staff.pitchedClefDrums=true",
     ],
 
     Preset.drums_1line: [

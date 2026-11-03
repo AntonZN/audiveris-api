@@ -484,6 +484,14 @@ class DrumPresetStavesTest(unittest.TestCase):
         args = get_preset_args(Preset.drums_1line)
         self.assertIn("org.audiveris.omr.sheet.ProcessingSwitches.fiveLineStaves=false", args)
 
+    def test_drums_read_a_pitched_clef_staff_by_context(self) -> None:
+        """Малый барабан с басовым ключом (Count-Down): 0 ударных из 663 нот без этого ключа."""
+        constant = "org.audiveris.omr.sheet.Staff.pitchedClefDrums"
+        self.assertIn(f"{constant}=true", get_preset_args(Preset.drums))
+        # Опечатку в имени Audiveris не заметит: константа должна быть объявлена в форке.
+        staff = REPO / "app" / "src" / "main" / "java" / "org" / "audiveris" / "omr" / "sheet" / "Staff.java"
+        self.assertRegex(staff.read_text(), r"Constant\.Boolean pitchedClefDrums\b")
+
     def test_only_drums_retries_without_one_line_staves(self) -> None:
         self.assertTrue(drums.reads_one_line_staves("drums"))
         self.assertFalse(drums.reads_one_line_staves("drums_1line"))

@@ -570,7 +570,9 @@ public class ClefBuilder
                     null);
 
             // Allowed clefs shapes
-            final EnumSet clefShapes = staff.isDrum() ? ONE_LINE_CLEF_SHAPES : HEADER_CLEF_SHAPES;
+            // (The actual clef is still to be found, so only a declared drum staff matters)
+            final EnumSet clefShapes = staff.isDeclaredDrum() ? ONE_LINE_CLEF_SHAPES
+                    : HEADER_CLEF_SHAPES;
             for (Evaluation eval : evals) {
                 final Shape shape = eval.shape;
 
