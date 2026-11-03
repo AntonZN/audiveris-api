@@ -26,16 +26,19 @@ Audiveris не распознал совсем, темп там ни при чё
 (`half_note`), тогда четвертей в минуту вдвое больше напечатанного числа; точку при
 ноте не различаем.
 
-Модель грузится один раз на процесс: воркер API долгоживущий, первая страница платит
-~0.5 c за загрузку. Дальше шаг стоит 1.35 c на файл (медиана корпуса, максимум ~2 c)
-при медиане Audiveris 18.6 c.
+Сам OCR — отдельным процессом на задачу (`tempo_ocr_runner.py`), как homr: вызов
+onnxruntime на полосе страницы поднимал веб-процесс API на 0.7-1 ГБ, и память не
+возвращалась. Модель грузится один раз на задачу, все картинки идут одним запуском;
+поиск стана и разбор остаются здесь. Шаг целиком — 1.8 c на файл (медиана корпуса,
+максимум 3.1 c) при медиане Audiveris 18.6 c; в процессе было 1.2 c, но память дороже.
 """
 
 from __future__ import annotations
 
+import json
 import math
-import threading
-from collections.abc import Callable, Iterator
+import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -53,19 +56,21 @@ MAX_PAGES = 3
 PDF_DPI = 300
 PDF_MAX_PIXELS = 12_000_000
 
-# Интервал стана, к которому приводим страницу перед OCR, — по проходу на каждое
-# значение, второй только если первый отметки не нашёл. Детектор строк RapidOCR
-# чувствителен к размеру текста: на PDF корпуса без приведения теряются «=» у Pull Me
-# Under и Reggaeton (читается голое «102»), при 24 px — King Cadence, при 28 px —
-# Reggaeton; два прохода находят все три. Проход — около 0.3 c, ложной отметки на
-# листах без темпа не дал ни один масштаб.
+# Интервал стана, к которому приводим страницу перед OCR, — по картинке на каждое
+# значение; второй масштаб в дело идёт, если в первом отметки нет. Детектор строк
+# RapidOCR чувствителен к размеру текста: на PDF корпуса без приведения теряются «=» у
+# Pull Me Under и Reggaeton (читается голое «102»), при 24 px — King Cadence, при
+# 28 px — Reggaeton; два масштаба находят все три. Ложной отметки на листах без темпа
+# не дал ни один масштаб.
 OCR_INTERLINES = (24.0, 28.0)
 
-# Читатель: картинка → [(четыре угла строки, текст)].
-Reader = Callable[[np.ndarray], list[tuple[np.ndarray, str]]]
+RUNNER = Path(__file__).with_name("tempo_ocr_runner.py")
+# Запуск — около 2 c: импорт onnxruntime, модель, две картинки.
+OCR_TIMEOUT = 60
 
-_reader: Reader | None = None
-_reader_lock = threading.Lock()
+
+class OcrError(RuntimeError):
+    """Раннер OCR не отработал: нет RapidOCR в интерпретаторе, таймаут, падение."""
 
 
 @dataclass
@@ -97,40 +102,29 @@ class TempoReading:
         return f"темп по OCR (стр. {self.page + 1}): {found}; строки над станом: {shown}"
 
 
-def _load_reader() -> Reader:
-    """RapidOCR, который стоит рядом с homr: 0.6.2 тянет `rapidocr_onnxruntime`, 0.7 — `rapidocr`."""
-    try:
-        from rapidocr_onnxruntime import RapidOCR
-    except ImportError:
-        from rapidocr import RapidOCR
+def _ocr_batch(images: list[np.ndarray]) -> list[list[tuple[np.ndarray, str]]]:
+    """OCR картинок одним запуском раннера; на каждую — [(четыре угла строки, текст)].
 
-        engine = RapidOCR()
+    Интерпретатор — тот, где стоит homr (`OMR_HOMR_PYTHON` или текущий): RapidOCR
+    приходит вместе с ним.
+    """
+    import cv2
 
-        def read(image: np.ndarray) -> list[tuple[np.ndarray, str]]:
-            output = engine(image)
-            if output.txts is None:
-                return []
-            return [(np.asarray(box, np.float32), text)
-                    for box, text in zip(output.boxes, output.txts)]
+    from omr.engines.homr_engine import _run, interpreter
 
-        return read
-
-    engine = RapidOCR()
-
-    def read(image: np.ndarray) -> list[tuple[np.ndarray, str]]:
-        result, _ = engine(image)
-        return [(np.asarray(box, np.float32), text) for box, text, _ in result or []]
-
-    return read
-
-
-def _ocr(image: np.ndarray) -> list[tuple[np.ndarray, str]]:
-    global _reader
-    if _reader is None:
-        with _reader_lock:
-            if _reader is None:
-                _reader = _load_reader()
-    return _reader(image)
+    with tempfile.TemporaryDirectory(prefix="tempo-ocr-") as tmp:
+        paths = []
+        for index, image in enumerate(images):
+            path = Path(tmp) / f"{index}.png"
+            cv2.imwrite(str(path), image)
+            paths.append(str(path))
+        target = Path(tmp) / "ocr.json"
+        done = _run([interpreter(), str(RUNNER), str(target), *paths], OCR_TIMEOUT)
+        if done.returncode != 0 or not target.exists():
+            reason = (done.stderr or "").strip().splitlines()[-1:] or ["без вывода"]
+            raise OcrError(f"OCR темпа не отработал (код {done.returncode}): {reason[0][:200]}")
+        pages = json.loads(target.read_text(encoding="utf-8"))
+    return [[(np.asarray(box, np.float32), text) for box, text in lines] for lines in pages]
 
 
 def first_staff(gray: np.ndarray):
@@ -152,19 +146,10 @@ def first_staff(gray: np.ndarray):
     return line, float(np.max(line.ys)) + 2 * line.thickness, None
 
 
-def _lines_above(region: np.ndarray, top, scale: float) -> list[tuple[np.ndarray, str]]:
-    """OCR области в масштабе `scale`: строки, чей центр выше линии `top`, слева направо.
-
-    Рамки строк — в координатах страницы.
-    """
-    import cv2
-
-    image = region
-    if scale != 1:
-        interpolation = cv2.INTER_CUBIC if scale > 1 else cv2.INTER_AREA
-        image = cv2.resize(region, None, fx=scale, fy=scale, interpolation=interpolation)
+def _lines_above(lines: list[tuple[np.ndarray, str]], top, scale: float) -> list[tuple[np.ndarray, str]]:
+    """Строки, чей центр выше линии `top`, слева направо; рамки — в координатах страницы."""
     above = []
-    for box, text in _ocr(cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)):
+    for box, text in lines:
         box = box / scale
         x, y = box.mean(axis=0)
         if y < top.y_at(x):
@@ -218,6 +203,8 @@ def half_note(gray: np.ndarray, box: np.ndarray) -> bool:
 
 def read_page(gray: np.ndarray) -> TempoReading | None:
     """Отметка над первым станом страницы; None — стана на странице нет."""
+    import cv2
+
     from api.analysis import bpm_from_texts
 
     staff = first_staff(gray)
@@ -226,9 +213,13 @@ def read_page(gray: np.ndarray) -> TempoReading | None:
     top, bottom, interline = staff
     region = gray[: int(min(gray.shape[0], bottom + 1))]
     scales = [min(max(target / interline, 0.5), 3.0) for target in OCR_INTERLINES] if interline else [1.0]
+    images = [region if scale == 1 else
+              cv2.resize(region, None, fx=scale, fy=scale,
+                         interpolation=cv2.INTER_CUBIC if scale > 1 else cv2.INTER_AREA)
+              for scale in scales]
     shown: list[str] | None = None
-    for scale in scales:
-        lines = _lines_above(region, top, scale)
+    for scale, found in zip(scales, _ocr_batch(images)):
+        lines = _lines_above(found, top, scale)
         texts = [text for _, text in lines]
         for box, text in lines:
             printed = bpm_from_texts([text])

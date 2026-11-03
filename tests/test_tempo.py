@@ -370,21 +370,24 @@ class TempoOcrTest(unittest.TestCase):
         self.shown: list[tuple[float, float]] = []   # (высота, ширина) в координатах страницы
 
     def _reader(self, *passes: list[tuple[float, float, str]]):
-        """Ответ OCR на каждый вызов по очереди; последний повторяется."""
+        """Ответ OCR на каждую картинку запуска по очереди (масштаб 24, 28); последний повторяется."""
         from unittest import mock
 
         import numpy as np
 
         from api import tempo_ocr
 
-        def read(image):
-            scale = image.shape[1] / self.WIDTH
-            self.shown.append((image.shape[0] / scale, image.shape[1] / scale))
-            lines = passes[min(len(self.shown), len(passes)) - 1]
-            return [(np.float32([[x, y], [x + 120, y], [x + 120, y + 30], [x, y + 30]]) * scale, text)
-                    for x, y, text in lines]
+        def batch(images):
+            answers = []
+            for index, image in enumerate(images):
+                scale = image.shape[1] / self.WIDTH
+                self.shown.append((image.shape[0] / scale, image.shape[1] / scale))
+                lines = passes[min(index, len(passes) - 1)]
+                answers.append([(np.float32([[x, y], [x + 120, y], [x + 120, y + 30], [x, y + 30]]) * scale,
+                                 text) for x, y, text in lines])
+            return answers
 
-        return mock.patch.object(tempo_ocr, "_reader", read)
+        return mock.patch.object(tempo_ocr, "_ocr_batch", batch)
 
     def _png(self, name: str, image) -> Path:
         import cv2
@@ -431,7 +434,7 @@ class TempoOcrTest(unittest.TestCase):
         with self._reader([(700, 200, "=95"), (300, 240, "J=90")]):
             self.assertEqual(read_tempo([page]).bpm, 90)
 
-    def test_second_scale_is_tried_when_the_first_reads_nothing(self) -> None:
+    def test_second_scale_is_used_when_the_first_reads_nothing(self) -> None:
         """Pull Me Under: на одном масштабе OCR теряет «=» и читает голое «102»."""
         from api import tempo_ocr
 
@@ -440,7 +443,7 @@ class TempoOcrTest(unittest.TestCase):
             reading = tempo_ocr.read_tempo([page])
 
         self.assertEqual(reading.bpm, 102)
-        self.assertEqual(len(self.shown), 2)
+        self.assertEqual(len(self.shown), len(tempo_ocr.OCR_INTERLINES))
 
     def test_cover_page_is_skipped(self) -> None:
         import numpy as np
@@ -453,7 +456,7 @@ class TempoOcrTest(unittest.TestCase):
             reading = read_tempo([cover, page])
 
         self.assertEqual((reading.bpm, reading.page), (120, 1))
-        self.assertEqual(len(self.shown), 1)   # обложку в OCR не отдавали
+        self.assertEqual(len(self.shown), 2)   # обложку в OCR не отдавали: два масштаба страницы 2
 
     def test_mark_on_a_later_page_is_not_the_start_tempo(self) -> None:
         """Нет отметки на первой странице с нотами — дальше не ищем: там смена темпа."""
@@ -468,6 +471,78 @@ class TempoOcrTest(unittest.TestCase):
         self.assertEqual(reading.page, 0)
         self.assertEqual(reading.texts, ["Moderate rock"])
         self.assertEqual(len(self.shown), len(tempo_ocr.OCR_INTERLINES))   # одна страница
+
+
+STUB_ONNXRUNTIME = """
+class RapidOCR:
+    def __call__(self, path):
+        box = [[10, 20], [130, 20], [130, 50], [10, 50]]
+        return [[box, "J= 87:" + path.rsplit("/", 1)[-1], 0.9]], [0.1]
+"""
+
+STUB_RAPIDOCR = """
+class _Output:
+    def __init__(self, path):
+        self.boxes = [[[10.0, 20.0], [130.0, 20.0], [130.0, 50.0], [10.0, 50.0]]]
+        self.txts = ("J= 87:" + str(path).rsplit("/", 1)[-1],)
+
+class RapidOCR:
+    def __call__(self, path):
+        return _Output(path)
+"""
+
+
+class TempoOcrRunnerTest(unittest.TestCase):
+    """api/tempo_ocr_runner.py: отдельный процесс, все картинки за один запуск, JSON в файл.
+
+    RapidOCR подменён модулем-заглушкой: проверяется контракт раннера, а не OCR.
+    """
+
+    def setUp(self) -> None:
+        try:
+            import cv2  # noqa: F401
+            import numpy as np
+        except ImportError:  # pragma: no cover
+            self.skipTest("нужен OpenCV")
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+        self.images = [np.full((60, 200), 255, np.uint8), np.full((60, 200), 255, np.uint8)]
+
+    def _stub(self, onnxruntime: str | None, rapidocr: str | None):
+        from unittest import mock
+
+        for name, body in (("rapidocr_onnxruntime", onnxruntime), ("rapidocr", rapidocr)):
+            if body is not None:
+                (self.dir / name).mkdir()
+                (self.dir / name / "__init__.py").write_text(body)
+        return mock.patch.dict("os.environ", {"PYTHONPATH": str(self.dir), "OMR_HOMR_PYTHON": sys.executable})
+
+    def test_reads_every_image_in_one_run(self) -> None:
+        from api import tempo_ocr
+
+        with self._stub(STUB_ONNXRUNTIME, None):
+            pages = tempo_ocr._ocr_batch(self.images)
+
+        self.assertEqual([[text for _, text in lines] for lines in pages], [["J= 87:0.png"], ["J= 87:1.png"]])
+        self.assertEqual(pages[0][0][0].shape, (4, 2))
+
+    def test_falls_back_to_rapidocr_of_newer_homr(self) -> None:
+        from api import tempo_ocr
+
+        with self._stub("raise ImportError('нет')", STUB_RAPIDOCR):
+            pages = tempo_ocr._ocr_batch(self.images[:1])
+
+        self.assertEqual([text for _, text in pages[0]], ["J= 87:0.png"])
+
+    def test_failure_is_an_ocr_error(self) -> None:
+        from api import tempo_ocr
+
+        with self._stub("raise ImportError('No module named onnxruntime')", "raise ImportError('нет')"):
+            with self.assertRaises(tempo_ocr.OcrError) as caught:
+                tempo_ocr._ocr_batch(self.images[:1])
+
+        self.assertIn("ImportError", str(caught.exception))
 
 
 def _metronome_mark(hollow: bool):

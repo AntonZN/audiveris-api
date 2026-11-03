@@ -636,7 +636,8 @@ class AudiverisService:
         промежуточная версия нашего OCR отметку пропускала, число Audiveris было верным
         (3 из 3). Выбросив его, мы бы теряли верный темп и ничего не выигрывали.
 
-        Сбой OCR задачу не роняет: темп — метаданные, а ноты уже распознаны.
+        Сбой OCR (нет RapidOCR в интерпретаторе homr, таймаут) задачу не роняет: темп —
+        метаданные, а ноты уже распознаны.
         """
         from api import tempo_ocr
         from api.analysis import (
@@ -648,9 +649,8 @@ class AudiverisService:
         reading = None
         try:
             reading = tempo_ocr.read_tempo(pages)
-        except ImportError as exc:
-            # Нет RapidOCR — значит, нет и homr; в образе он стоит всегда.
-            logger.warning("OCR темпа недоступен: %s", exc)
+        except tempo_ocr.OcrError as exc:
+            logger.warning("%s: %s", output_path.name, exc)
         except Exception:
             logger.exception("OCR темпа упал на %s", output_path.name)
         if reading is None or reading.bpm is None:

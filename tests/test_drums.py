@@ -527,7 +527,10 @@ class DrumTempoTest(unittest.TestCase):
 
     def test_ocr_failure_does_not_fail_the_task(self) -> None:
         self._audiveris(printed=120, tempo=120)
-        with self._ocr(None, side_effect=ImportError("No module named 'rapidocr'")):
+        from api import tempo_ocr
+
+        failure = tempo_ocr.OcrError("OCR темпа не отработал (код 1): ModuleNotFoundError")
+        with self._ocr(None, side_effect=failure):
             services.AudiverisService._drum_tempo(self.score, self.log, self.pages)
 
         self.assertEqual(self._bpm(), 120)
